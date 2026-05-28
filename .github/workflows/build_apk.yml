@@ -1,0 +1,26 @@
+name: Build FaceSwap Pro APK
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: android debug
+          buildozer_version: stable
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-debug-apk
+          path: ${{ steps.buildozer.outputs.filename }}
+          retention-days: 30
