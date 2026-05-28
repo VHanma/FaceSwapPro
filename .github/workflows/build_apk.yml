@@ -1,5 +1,4 @@
 name: Build FaceSwap Pro APK
-
 on:
   push:
     branches: [master]
@@ -8,19 +7,45 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - uses: actions/checkout@v3
 
-      - name: Build APK with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
         with:
-          command: android debug
-          buildozer_version: stable
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git zip unzip autoconf libtool pkg-config \
+            openjdk-17-jdk \
+            libssl-dev libffi-dev \
+            libltdl-dev ccache lld
+
+      - name: Install buildozer + cython
+        run: |
+          pip3 install --upgrade pip
+          pip3 install buildozer cython==0.29.36 virtualenv
+
+      - name: Cache buildozer global directory
+        uses: actions/cache@v3
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-
+
+      - name: Build APK
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+        run: |
+          yes | buildozer -v android debug 2>&1
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FaceSwapPro-debug-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
           retention-days: 30
