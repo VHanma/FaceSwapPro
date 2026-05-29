@@ -187,7 +187,7 @@ class Root(BoxLayout):
 
     def _faceswap_thread(self):
         try:
-            from faceswap import FaceSwapper
+            from faceswap import process_video
 
             if platform == 'android':
                 from android.storage import primary_external_storage_path
@@ -199,19 +199,13 @@ class Root(BoxLayout):
             fname = (self.output_name.text.strip() or 'faceswap_result') + '.mp4'
             output_path = os.path.join(save_dir, fname)
 
-            self._update_status('🧠 Processing video on-device...\nThis may take a few minutes.')
+            self._update_status('☁️ Sending to AI server...\nThis may take a few minutes.')
 
-            swapper = FaceSwapper()
-
-            def on_progress(current, total):
-                pct = int(current / total * 100) if total > 0 else 0
+            def on_progress(message, pct):
                 self._set_progress(pct)
-                self._update_status(
-                    f'🧠 Processing frame {current}/{total} ({pct}%)\n'
-                    'Please keep the app open...'
-                )
+                self._update_status(f'🧠 {message}\nPlease keep the app open...')
 
-            ok, result = swapper.process_video(
+            ok, result = process_video(
                 self.source_image_path,
                 self.target_video_path,
                 output_path,
