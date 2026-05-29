@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""FaceSwap Pro - Free on-device movie-grade face swap"""
+"""FaceSwap Pro - Free movie-grade face swap via HuggingFace AI"""
 
 import os
+import tempfile
 import threading
 
 from kivy.app import App
@@ -18,6 +19,28 @@ from kivy.core.window import Window
 
 Window.clearcolor = (0.06, 0.06, 0.10, 1)
 
+_REQUEST_IMAGE = 1001
+_REQUEST_VIDEO = 1002
+
+
+def _copy_uri_to_temp(uri, suffix):
+    """Copy a content:// URI to a local temp file and return the path."""
+    from jnius import autoclass
+    PythonActivity = autoclass('org.kivy.android.PythonActivity')
+    context = PythonActivity.mActivity
+    cr = context.getContentResolver()
+    stream = cr.openInputStream(uri)
+    tmp = tempfile.mktemp(suffix=suffix)
+    buf = bytearray(65536)
+    with open(tmp, 'wb') as f:
+        while True:
+            n = stream.read(buf)
+            if n < 0:
+                break
+            f.write(bytes(buf[:n]))
+    stream.close()
+    return tmp
+
 
 class Root(BoxLayout):
     def __init__(self, **kwargs):
@@ -32,6 +55,10 @@ class Root(BoxLayout):
         self.size_hint_y = None
         self.bind(minimum_height=self.setter('height'))
         self._build_ui()
+
+        if platform == 'android':
+            from android import activity as _activity
+            _activity.bind(on_activity_result=self._on_activity_result)
 
     def _lbl(self, text, height=dp(30), **kw):
         return Label(
@@ -54,13 +81,12 @@ class Root(BoxLayout):
             color=(0.25, 0.85, 1, 1)
         ))
         self.add_widget(Label(
-            text='100% FREE · On-device · Movie-grade',
+            text='100% FREE · AI-powered · Movie-grade',
             font_size=dp(13), size_hint_y=None, height=dp(22),
             color=(0.6, 0.6, 0.8, 1)
         ))
         self.add_widget(Label(size_hint_y=None, height=dp(6)))
 
-        # Source face button
         self.source_btn = self._btn('📷  Pick Source Face Photo', (0.15, 0.55, 0.90, 1))
         self.source_btn.bind(on_press=self.pick_source)
         self.add_widget(self.source_btn)
@@ -71,7 +97,6 @@ class Root(BoxLayout):
         )
         self.add_widget(self.source_label)
 
-        # Target video button
         self.video_btn = self._btn('🎬  Pick Target Video', (0.10, 0.65, 0.35, 1))
         self.video_btn.bind(on_press=self.pick_video)
         self.add_widget(self.video_btn)
@@ -82,7 +107,6 @@ class Root(BoxLayout):
         )
         self.add_widget(self.video_label)
 
-        # Output filename
         self.add_widget(Label(size_hint_y=None, height=dp(4)))
         self.add_widget(self._lbl('Output Filename (no extension):', color=(0.8, 0.8, 1, 1)))
         self.output_name = TextInput(
@@ -93,7 +117,6 @@ class Root(BoxLayout):
         )
         self.add_widget(self.output_name)
 
-        # Run button
         self.add_widget(Label(size_hint_y=None, height=dp(6)))
         self.run_btn = Button(
             text='🚀  SWAP FACE',
@@ -127,39 +150,59 @@ class Root(BoxLayout):
     # ── File pickers ─────────────────────────────────────────────────────────
     def pick_source(self, *args):
         if platform == 'android':
-            try:
-                from plyer import filechooser
-                filechooser.open_file(
-                    on_selection=self._on_source_select,
-                    filters=['*.jpg', '*.jpeg', '*.png', '*.webp']
-                )
-            except Exception as e:
-                self._update_status(f'Picker error: {e}')
+            from jnius import autoclass
+            Intent = autoclass('android.content.Intent')
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType('image/*')
+            PythonActivity.mActivity.startActivityForResult(intent, _REQUEST_IMAGE)
         else:
             self.source_label.text = 'File picker (Android only in build)'
 
     def pick_video(self, *args):
         if platform == 'android':
-            try:
-                from plyer import filechooser
-                filechooser.open_file(
-                    on_selection=self._on_video_select,
-                    filters=['*.mp4', '*.mov', '*.avi', '*.mkv', '*.webm']
-                )
-            except Exception as e:
-                self._update_status(f'Picker error: {e}')
+            from jnius import autoclass
+            Intent = autoclass('android.content.Intent')
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType('video/*')
+            PythonActivity.mActivity.startActivityForResult(intent, _REQUEST_VIDEO)
         else:
             self.video_label.text = 'File picker (Android only in build)'
 
-    def _on_source_select(self, selection):
-        if selection:
-            self.source_image_path = selection[0]
-            self._set_source_label(f'✓ {os.path.basename(self.source_image_path)}', True)
+    def _on_activity_result(self, requestCode, resultCode, data):
+        RESULT_OK = -1
+        if resultCode != RESULT_OK or data is None:
+            return
+        uri = data.getData()
+        if uri is None:
+            return
 
-    def _on_video_select(self, selection):
-        if selection:
-            self.target_video_path = selection[0]
-            self._set_video_label(f'✓ {os.path.basename(self.target_video_path)}', True)
+        if requestCode == _REQUEST_IMAGE:
+            self._set_source_label('⏳ Loading photo...', False)
+            threading.Thread(
+                target=self._load_uri, args=(uri, '.jpg', 'image'), daemon=True
+            ).start()
+        elif requestCode == _REQUEST_VIDEO:
+            self._set_video_label('⏳ Loading video...', False)
+            threading.Thread(
+                target=self._load_uri, args=(uri, '.mp4', 'video'), daemon=True
+            ).start()
+
+    def _load_uri(self, uri, suffix, kind):
+        try:
+            path = _copy_uri_to_temp(uri, suffix)
+            if kind == 'image':
+                self.source_image_path = path
+                self._set_source_label('✓ Photo ready', True)
+            else:
+                self.target_video_path = path
+                self._set_video_label('✓ Video ready', True)
+        except Exception as e:
+            if kind == 'image':
+                self._set_source_label(f'Error: {e}', False)
+            else:
+                self._set_video_label(f'Error: {e}', False)
 
     @mainthread
     def _set_source_label(self, text, ok=False):
@@ -182,7 +225,7 @@ class Root(BoxLayout):
 
         self.run_btn.disabled = True
         self._set_progress(0)
-        self._update_status('🔄 Starting on-device face swap...')
+        self._update_status('🔄 Starting face swap...')
         threading.Thread(target=self._faceswap_thread, daemon=True).start()
 
     def _faceswap_thread(self):
@@ -213,7 +256,6 @@ class Root(BoxLayout):
             )
 
             if ok:
-                # Notify Android gallery
                 if platform == 'android':
                     try:
                         from jnius import autoclass
@@ -261,6 +303,8 @@ class FaceSwapProApp(App):
             request_permissions([
                 Permission.READ_EXTERNAL_STORAGE,
                 Permission.WRITE_EXTERNAL_STORAGE,
+                Permission.READ_MEDIA_IMAGES,
+                Permission.READ_MEDIA_VIDEO,
             ])
 
         sv = ScrollView(do_scroll_x=False)
