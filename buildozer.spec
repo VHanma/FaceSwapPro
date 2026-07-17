@@ -4,8 +4,8 @@ package.name = faceswappro
 package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
-source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests
-version = 1.3.1
+source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests,recipes
+version = 1.3.2
 
 requirements = python3,kivy,android,pyjnius,numpy,opencv,ffpyplayer,ffpyplayer_codecs
 orientation = portrait
@@ -24,6 +24,7 @@ android.logcat_filters = *:S python:D
 
 p4a.bootstrap = sdl2
 p4a.branch = master
+p4a.local_recipes = recipes
 
 [buildozer]
 log_level = 2
