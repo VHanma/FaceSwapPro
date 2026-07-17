@@ -5,7 +5,7 @@ package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
 source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests,recipes
-version = 1.3.2
+version = 1.3.3
 
 requirements = python3,kivy,android,pyjnius,numpy,opencv,ffpyplayer,ffpyplayer_codecs
 orientation = portrait
@@ -23,7 +23,6 @@ android.private_storage = True
 android.logcat_filters = *:S python:D
 
 p4a.bootstrap = sdl2
-p4a.branch = master
 p4a.local_recipes = recipes
 
 [buildozer]
