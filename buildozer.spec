@@ -3,24 +3,27 @@ title = FaceSwap Pro
 package.name = faceswappro
 package.domain = org.vaan.faceswap
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,json
-version = 1.0
+source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
+source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests
+version = 1.1.0
 
-requirements = python3,kivy,requests,certifi,charset-normalizer,urllib3,idna
-
+requirements = python3,kivy,android,pyjnius,numpy,opencv
 orientation = portrait
 fullscreen = 0
 
-android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO
-android.api = 33
-android.minapi = 24
-android.ndk = 25b
+# Storage Access Framework picks the files. MediaStore saves into Movies/FaceSwapPro.
+# No broad file-access or internet permission is required.
+android.api = 35
+android.minapi = 29
+android.ndk = 27c
 android.accept_sdk_license = True
-
 android.archs = arm64-v8a
+android.enable_androidx = True
+android.private_storage = True
+android.logcat_filters = *:S python:D
 
-# Use kivy bootstrap
 p4a.bootstrap = sdl2
+p4a.branch = develop
 
 [buildozer]
 log_level = 2
