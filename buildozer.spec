@@ -5,7 +5,7 @@ package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
 source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests,recipes
-version = 1.3.7
+version = 1.3.8
 
 requirements = python3,kivy,android,pyjnius,numpy,opencv,ffpyplayer,ffpyplayer_codecs
 orientation = portrait
@@ -15,7 +15,7 @@ fullscreen = 0
 # No broad file-access or internet permission is required.
 android.api = 36
 android.minapi = 29
-android.ndk = 28c
+android.ndk = 25b
 android.accept_sdk_license = True
 android.archs = arm64-v8a
 android.enable_androidx = True
