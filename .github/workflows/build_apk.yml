@@ -19,12 +19,37 @@ concurrency:
 jobs:
   build:
     name: Compile ARM64 Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 300
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Android build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ant autoconf automake autopoint build-essential ccache cmake gettext git \
+            lbzip2 libffi-dev libltdl-dev libncurses5-dev libncursesw5-dev \
+            libssl-dev libtool patch pkg-config python3-dev unzip wget zip zlib1g-dev
+
+      - name: Install Buildozer toolchain
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "buildozer==1.6.0" "cython==0.29.34"
+          buildozer --version
 
       - name: Bundle OpenCV face detector
         run: |
@@ -36,17 +61,18 @@ jobs:
 
       - name: Validate source files
         run: |
-          python3 -m py_compile main.py faceswap.py
+          python -m py_compile main.py faceswap.py
           grep -q "def process_video" faceswap.py
           grep -q "requirements = .*opencv" buildozer.spec
+          grep -q "android.api = 36" buildozer.spec
+          grep -q "android.ndk = 28c" buildozer.spec
 
-      - name: Build APK with Buildozer
-        id: buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          command: buildozer -v android debug
-          workdir: .
-          buildozer_version: stable
+      - name: Build debug APK
+        env:
+          USE_CCACHE: "1"
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          yes | buildozer -v android debug
 
       - name: Verify generated package
         run: |
