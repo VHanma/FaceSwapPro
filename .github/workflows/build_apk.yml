@@ -3,56 +3,30 @@ name: Build working FaceSwap Pro APK
 on:
   workflow_dispatch:
   push:
-    branches: [master, main, install-ready]
+    branches: [master, main, install-ready, apk-build]
     paths:
       - "**.py"
       - "assets/**"
       - "buildozer.spec"
       - ".github/workflows/build_apk.yml"
+  pull_request:
+    branches: [master]
 
 concurrency:
-  group: faceswappro-apk-${{ github.ref }}
+  group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    name: Compile ARM64 Android APK
+    runs-on: ubuntu-latest
     timeout-minutes: 300
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install Android build prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            autoconf automake build-essential ccache cmake git libffi-dev \
-            libltdl-dev liblzma-dev libncurses5-dev libncursesw5-dev \
-            libssl-dev libtool openjdk-17-jdk pkg-config unzip zip zlib1g-dev
-
-      - name: Install Buildozer
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "buildozer==1.6.0"
-
-      - name: Restore Android build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: faceswappro-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: |
-            faceswappro-${{ runner.os }}-
-
-      - name: Bundle the OpenCV face detector
+      - name: Bundle OpenCV face detector
         run: |
           mkdir -p assets
           curl --fail --location --retry 3 \
@@ -60,26 +34,32 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
-      - name: Validate Python source
-        run: python -m py_compile main.py faceswap.py
-
-      - name: Build debug APK
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          USE_CCACHE: "1"
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
+      - name: Validate source files
         run: |
-          yes | buildozer -v android debug
+          python3 -m py_compile main.py faceswap.py
+          grep -q "def process_video" faceswap.py
+          grep -q "requirements = .*opencv" buildozer.spec
 
-      - name: Verify APK exists
+      - name: Build APK with Buildozer
+        id: buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer -v android debug
+          workdir: .
+          buildozer_version: stable
+
+      - name: Verify generated package
         run: |
           test -n "$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           ls -lh bin/*.apk
+          sha256sum bin/*.apk | tee APK_SHA256.txt
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: FaceSwapPro-working-arm64-apk
-          path: bin/*.apk
+          path: |
+            bin/*.apk
+            APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
