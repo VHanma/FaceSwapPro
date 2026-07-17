@@ -1,20 +1,15 @@
-"""FaceSwap Pro override for python-for-android's FFpyplayer recipe.
-
-Current FFmpeg no longer ships two legacy pieces that FFpyplayer declares but
-MediaWriter does not use: libpostproc and avfft. Disable/remove those declarations
-while retaining the actual MP4 encoders and muxers.
-"""
+"""FFpyplayer recipe matched to the pinned Python-for-Android toolchain."""
 
 from os.path import join
 
-from pythonforandroid.recipe import PyProjectRecipe, Recipe
+from pythonforandroid.recipe import CythonRecipe
+from pythonforandroid.toolchain import Recipe
 
 
-class FaceSwapFFPyPlayerRecipe(PyProjectRecipe):
-    version = "v4.5.1"
+class FaceSwapFFPyPlayerRecipe(CythonRecipe):
+    version = "v4.3.2"
     url = "https://github.com/matham/ffpyplayer/archive/{version}.zip"
     depends = ["python3", "sdl2", "ffmpeg"]
-    patches = ["setup.py.patch", "remove-avfft.patch"]
     opt_depends = ["openssl", "ffpyplayer_codecs"]
 
     def get_recipe_env(self, arch, with_flags_in_cc=True):
@@ -36,8 +31,8 @@ class FaceSwapFFPyPlayerRecipe(PyProjectRecipe):
         env["NDKPLATFORM"] = "NOTNONE"
         env["LIBLINK"] = "NOTNONE"
 
-        # MediaWriter uses libavcodec/libavformat and does not need postproc.
-        env["CONFIG_POSTPROC"] = "0"
+        if "ffpyplayer_codecs" not in self.ctx.recipe_build_order:
+            env["CONFIG_POSTPROC"] = "0"
         return env
 
 
