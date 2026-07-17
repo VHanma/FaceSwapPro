@@ -5,9 +5,9 @@ package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
 source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests
-version = 1.2.0
+version = 1.3.0
 
-requirements = python3,kivy,android,pyjnius,numpy,opencv
+requirements = python3,kivy,android,pyjnius,numpy,opencv,ffpyplayer
 orientation = portrait
 fullscreen = 0
 
