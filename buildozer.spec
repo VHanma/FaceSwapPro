@@ -5,7 +5,7 @@ package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
 source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests,recipes
-version = 1.3.4
+version = 1.3.5
 
 requirements = python3,kivy,android,pyjnius,numpy,opencv,ffpyplayer,ffpyplayer_codecs
 orientation = portrait
@@ -23,9 +23,6 @@ android.private_storage = True
 android.logcat_filters = *:S python:D
 
 p4a.bootstrap = sdl2
-# Pin the last proven pre-Python-3.14 toolchain. Its Android runtime is Python 3.11,
-# which is compatible with FFpyplayer 4.5.1 and still supports the app's code.
-p4a.branch = 5d5ca2b57aa49c508950c927eb42d2ffe14c3cf6
 p4a.local_recipes = recipes
 
 [buildozer]
