@@ -52,6 +52,15 @@ jobs:
           buildozer --version
           cython --version
 
+      - name: Pin compatible python-for-android
+        run: |
+          mkdir -p .buildozer/android/platform
+          git clone https://github.com/kivy/python-for-android.git \
+            .buildozer/android/platform/python-for-android
+          cd .buildozer/android/platform/python-for-android
+          git checkout 5d5ca2b57aa49c508950c927eb42d2ffe14c3cf6
+          grep -q "version = '3.11.5'" pythonforandroid/recipes/python3/__init__.py
+
       - name: Bundle OpenCV face detector
         run: |
           mkdir -p assets
