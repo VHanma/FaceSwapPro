@@ -1,6 +1,7 @@
---- ffpyplayer/includes/ffmpeg.pxi
-+++ ffpyplayer.mod/includes/ffmpeg.pxi
-@@ -373,17 +373,6 @@
+--- a/ffpyplayer/includes/ffmpeg.pxi
++++ b/ffpyplayer/includes/ffmpeg.pxi
+@@ -5,17 +5,5 @@
+         AVPacket *av_packet_alloc()
          void av_packet_free(AVPacket **)
  
 -    extern from "libavcodec/avfft.h" nogil:
@@ -17,4 +18,3 @@
 -
      extern from "libavcodec/version.h" nogil:
          pass
- 
