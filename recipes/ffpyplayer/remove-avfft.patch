@@ -1,0 +1,20 @@
+--- ffpyplayer/includes/ffmpeg.pxi
++++ ffpyplayer.mod/includes/ffmpeg.pxi
+@@ -373,17 +373,6 @@
+         void av_packet_free(AVPacket **)
+ 
+-    extern from "libavcodec/avfft.h" nogil:
+-        enum RDFTransformType:
+-            DFT_R2C,
+-            IDFT_C2R,
+-            IDFT_R2C,
+-            DFT_C2R,
+-        struct RDFTContext:
+-            pass
+-        void av_rdft_end(RDFTContext *)
+-        RDFTContext *av_rdft_init(int, RDFTransformType)
+-        void av_rdft_calc(RDFTContext *, FFTSample *)
+-
+     extern from "libavcodec/version.h" nogil:
+         pass
+ 
