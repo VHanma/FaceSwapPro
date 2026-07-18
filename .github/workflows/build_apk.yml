@@ -70,12 +70,39 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
+      - name: Fix Android MediaStore integer overload
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("main.py")
+          text = path.read_text(encoding="utf-8")
+          marker = '    ContentValues = autoclass("android.content.ContentValues")\n'
+          integer_line = '    JavaInteger = autoclass("java.lang.Integer")\n'
+          if integer_line not in text:
+              if marker not in text:
+                  raise SystemExit("ContentValues marker was not found")
+              text = text.replace(marker, marker + integer_line, 1)
+          text = text.replace(
+              "values.put(MediaColumns.IS_PENDING, 1)",
+              "values.put(MediaColumns.IS_PENDING, JavaInteger.valueOf(1))",
+          )
+          text = text.replace(
+              "ready.put(MediaColumns.IS_PENDING, 0)",
+              "ready.put(MediaColumns.IS_PENDING, JavaInteger.valueOf(0))",
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Validate source files
         run: |
           python -m py_compile main.py faceswap.py
           grep -q "def process_video" faceswap.py
+          grep -q "JavaInteger.valueOf(1)" main.py
+          grep -q "JavaInteger.valueOf(0)" main.py
           grep -q "requirements = .*opencv" buildozer.spec
           grep -q "ffpyplayer_codecs" buildozer.spec
+          grep -q "version = 1.3.9" buildozer.spec
           grep -q "android.api = 36" buildozer.spec
           grep -q "android.ndk = 25b" buildozer.spec
           grep -q "p4a.source_dir = .buildozer/android/platform/python-for-android" buildozer.spec
