@@ -11,6 +11,7 @@ class FaceSwapFFPyPlayerRecipe(CythonRecipe):
     url = "https://github.com/matham/ffpyplayer/archive/{version}.zip"
     depends = ["python3", "sdl2", "ffmpeg"]
     opt_depends = ["openssl", "ffpyplayer_codecs"]
+    patches = ["setuptools-build-ext.patch"]
 
     def get_recipe_env(self, arch, with_flags_in_cc=True):
         env = super().get_recipe_env(arch)
