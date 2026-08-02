@@ -1,12 +1,16 @@
 """Offline face-swap engine for FaceSwap Pro.
 
-Uses OpenCV only. A source face is warped onto the largest face found in each
-video frame, then blended with seamlessClone. No server, account, or API key.
+A source face is warped onto the largest face found in each video frame and
+blended with OpenCV. Final MP4 encoding is handled by the FFmpeg executable
+bundled by python-for-android so Android does not depend on OpenCV VideoWriter
+codec support. No server, account, API key, or network connection is required.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple
 
@@ -48,7 +52,9 @@ class FaceSwapper:
         if self.cascade is not None and self.cascade.empty():
             self.cascade = None
 
-    def detect_face(self, image: np.ndarray, previous: Optional[Rect] = None) -> Optional[Rect]:
+    def detect_face(
+        self, image: np.ndarray, previous: Optional[Rect] = None
+    ) -> Optional[Rect]:
         """Return the largest detected face, preferring overlap with the last face."""
         if image is None or image.size == 0:
             return None
@@ -56,7 +62,9 @@ class FaceSwapper:
         height, width = image.shape[:2]
         scale = min(1.0, self.detection_width / float(max(width, 1)))
         if scale < 1.0:
-            small = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            small = cv2.resize(
+                image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+            )
         else:
             small = image
 
@@ -91,7 +99,9 @@ class FaceSwapper:
             return max(rects, key=lambda r: r[2] * r[3])
 
         def score(rect: Rect) -> float:
-            return self._iou(rect, previous) * 5.0 + (rect[2] * rect[3]) / float(width * height)
+            return self._iou(rect, previous) * 5.0 + (rect[2] * rect[3]) / float(
+                width * height
+            )
 
         return max(rects, key=score)
 
@@ -103,7 +113,9 @@ class FaceSwapper:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         height, width = image.shape[:2]
         minimum_area = width * height * 0.008
         candidates: list[Rect] = []
@@ -134,14 +146,34 @@ class FaceSwapper:
 
         normalized = np.array(
             [
-                (0.18, 0.12), (0.35, 0.04), (0.50, 0.01), (0.65, 0.04), (0.82, 0.12),
-                (0.05, 0.28), (0.02, 0.48), (0.08, 0.70), (0.22, 0.88),
+                (0.18, 0.12),
+                (0.35, 0.04),
+                (0.50, 0.01),
+                (0.65, 0.04),
+                (0.82, 0.12),
+                (0.05, 0.28),
+                (0.02, 0.48),
+                (0.08, 0.70),
+                (0.22, 0.88),
                 (0.50, 0.98),
-                (0.78, 0.88), (0.92, 0.70), (0.98, 0.48), (0.95, 0.28),
-                (0.25, 0.30), (0.40, 0.30), (0.60, 0.30), (0.75, 0.30),
-                (0.30, 0.40), (0.70, 0.40),
-                (0.50, 0.36), (0.50, 0.56), (0.41, 0.62), (0.59, 0.62),
-                (0.34, 0.73), (0.50, 0.70), (0.66, 0.73), (0.50, 0.82),
+                (0.78, 0.88),
+                (0.92, 0.70),
+                (0.98, 0.48),
+                (0.95, 0.28),
+                (0.25, 0.30),
+                (0.40, 0.30),
+                (0.60, 0.30),
+                (0.75, 0.30),
+                (0.30, 0.40),
+                (0.70, 0.40),
+                (0.50, 0.36),
+                (0.50, 0.56),
+                (0.41, 0.62),
+                (0.59, 0.62),
+                (0.34, 0.73),
+                (0.50, 0.70),
+                (0.66, 0.73),
+                (0.50, 0.82),
             ],
             dtype=np.float32,
         )
@@ -168,7 +200,9 @@ class FaceSwapper:
                 (output[:, :, channel] - src_mean_f) * (tgt_std_f / src_std_f)
                 + tgt_mean_f
             )
-        return cv2.cvtColor(np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return cv2.cvtColor(
+            np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR
+        )
 
     @staticmethod
     def _warp_triangle(
@@ -189,8 +223,12 @@ class FaceSwapper:
         if src_crop.size == 0 or dst_crop.size == 0:
             return
 
-        src_local = np.float32([(p[0] - sx, p[1] - sy) for p in source_triangle])
-        dst_local = np.float32([(p[0] - dx, p[1] - dy) for p in destination_triangle])
+        src_local = np.float32(
+            [(p[0] - sx, p[1] - sy) for p in source_triangle]
+        )
+        dst_local = np.float32(
+            [(p[0] - dx, p[1] - dy) for p in destination_triangle]
+        )
         transform = cv2.getAffineTransform(src_local, dst_local)
         warped = cv2.warpAffine(
             src_crop,
@@ -200,12 +238,21 @@ class FaceSwapper:
             borderMode=cv2.BORDER_REFLECT_101,
         )
         mask = np.zeros((dh, dw, 3), dtype=np.float32)
-        cv2.fillConvexPoly(mask, np.int32(dst_local), (1.0, 1.0, 1.0), lineType=cv2.LINE_AA)
-        mixed = dst_crop.astype(np.float32) * (1.0 - mask) + warped.astype(np.float32) * mask
-        destination[dy : dy + dh, dx : dx + dw] = np.clip(mixed, 0, 255).astype(np.uint8)
+        cv2.fillConvexPoly(
+            mask, np.int32(dst_local), (1.0, 1.0, 1.0), lineType=cv2.LINE_AA
+        )
+        mixed = (
+            dst_crop.astype(np.float32) * (1.0 - mask)
+            + warped.astype(np.float32) * mask
+        )
+        destination[dy : dy + dh, dx : dx + dw] = np.clip(
+            mixed, 0, 255
+        ).astype(np.uint8)
 
     @staticmethod
-    def _triangle_indices(points: np.ndarray, shape: Sequence[int]) -> list[tuple[int, int, int]]:
+    def _triangle_indices(
+        points: np.ndarray, shape: Sequence[int]
+    ) -> list[tuple[int, int, int]]:
         height, width = shape[:2]
         subdivision = cv2.Subdiv2D((0, 0, width, height))
         for point in points:
@@ -217,11 +264,14 @@ class FaceSwapper:
         triangles: list[tuple[int, int, int]] = []
         for raw in subdivision.getTriangleList():
             triangle_points = np.array(
-                [[raw[0], raw[1]], [raw[2], raw[3]], [raw[4], raw[5]]], dtype=np.float32
+                [[raw[0], raw[1]], [raw[2], raw[3]], [raw[4], raw[5]]],
+                dtype=np.float32,
             )
             indices: list[int] = []
             for triangle_point in triangle_points:
-                distances = np.linalg.norm(points.astype(np.float32) - triangle_point, axis=1)
+                distances = np.linalg.norm(
+                    points.astype(np.float32) - triangle_point, axis=1
+                )
                 index = int(np.argmin(distances))
                 if distances[index] <= 3.0:
                     indices.append(index)
@@ -256,11 +306,17 @@ class FaceSwapper:
         target_crop = target_frame[ty : ty + th, tx : tx + tw]
         color_source = source_image.copy()
         if source_crop.size and target_crop.size:
-            resized_target = cv2.resize(target_crop, (sw, sh), interpolation=cv2.INTER_AREA)
-            color_source[sy : sy + sh, sx : sx + sw] = self._color_match(source_crop, resized_target)
+            resized_target = cv2.resize(
+                target_crop, (sw, sh), interpolation=cv2.INTER_AREA
+            )
+            color_source[sy : sy + sh, sx : sx + sw] = self._color_match(
+                source_crop, resized_target
+            )
 
         result = target_frame.copy()
-        for i1, i2, i3 in self._triangle_indices(target_points, target_frame.shape):
+        for i1, i2, i3 in self._triangle_indices(
+            target_points, target_frame.shape
+        ):
             self._warp_triangle(
                 color_source,
                 result,
@@ -278,26 +334,107 @@ class FaceSwapper:
             min(max(center[1], 1), target_frame.shape[0] - 2),
         )
         try:
-            blended = cv2.seamlessClone(result, target_frame, mask, center, cv2.NORMAL_CLONE)
+            blended = cv2.seamlessClone(
+                result, target_frame, mask, center, cv2.NORMAL_CLONE
+            )
         except cv2.error:
             alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
-            blended = np.clip(result * alpha + target_frame * (1.0 - alpha), 0, 255).astype(np.uint8)
+            blended = np.clip(
+                result * alpha + target_frame * (1.0 - alpha), 0, 255
+            ).astype(np.uint8)
         return blended, target_rect
 
     @staticmethod
-    def _open_writer(path: str, info: VideoInfo) -> cv2.VideoWriter:
-        codec_candidates = ("mp4v", "avc1", "H264")
-        for codec in codec_candidates:
-            writer = cv2.VideoWriter(
-                path,
-                cv2.VideoWriter_fourcc(*codec),
-                info.fps,
-                (info.width, info.height),
+    def _ffmpeg_binary() -> str:
+        """Return the p4a-bundled FFmpeg executable, or the desktop one."""
+        return shutil.which("ffmpeg") or "ffmpeg"
+
+    @classmethod
+    def _open_ffmpeg_writer(
+        cls, output_path: str, source_video: str, info: VideoInfo
+    ) -> subprocess.Popen:
+        """Encode raw BGR frames to H.264 MP4 and preserve source audio if present."""
+        ffmpeg = cls._ffmpeg_binary()
+        command = [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-s:v",
+            f"{info.width}x{info.height}",
+            "-r",
+            f"{info.fps:.6f}",
+            "-i",
+            "pipe:0",
+            "-i",
+            source_video,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            "-shortest",
+            output_path,
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                bufsize=0,
             )
-            if writer.isOpened():
-                return writer
-            writer.release()
-        raise RuntimeError("This Android OpenCV build could not create an MP4 video")
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "FFmpeg is missing from this APK. Rebuild with ffmpeg,av_codecs."
+            ) from exc
+        if process.stdin is None:
+            process.kill()
+            raise RuntimeError("FFmpeg encoder pipe could not be opened")
+        return process
+
+    @staticmethod
+    def _finish_ffmpeg(process: subprocess.Popen) -> tuple[int, str]:
+        """Close the raw-frame pipe, wait for muxing, and return encoder diagnostics."""
+        if process.stdin is not None and not process.stdin.closed:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        timed_out = False
+        try:
+            code = process.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            code = process.wait()
+        stderr = b""
+        if process.stderr is not None:
+            try:
+                stderr = process.stderr.read()
+            except OSError:
+                stderr = b""
+        if timed_out:
+            return code or 1, "FFmpeg timed out while finalizing the MP4"
+        return code, stderr.decode("utf-8", errors="replace").strip()
 
     def process_video(
         self,
@@ -312,7 +449,10 @@ class FaceSwapper:
             return False, "The source photo could not be read"
         source_rect = self.detect_face(source)
         if source_rect is None:
-            return False, "No face found in the source photo. Use a clear front-facing photo."
+            return (
+                False,
+                "No face found in the source photo. Use a clear front-facing photo.",
+            )
 
         capture = cv2.VideoCapture(video_path)
         if not capture.isOpened():
@@ -325,29 +465,39 @@ class FaceSwapper:
         if width <= 0 or height <= 0:
             capture.release()
             return False, "The selected video has invalid dimensions"
-        if not np.isfinite(fps) or fps <= 1.0:
+        if not np.isfinite(fps) or fps <= 1.0 or fps > 240.0:
             fps = 30.0
         total = max(total, 1)
 
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         try:
-            writer = self._open_writer(output_path, VideoInfo(width, height, fps, total))
+            encoder = self._open_ffmpeg_writer(
+                output_path, video_path, VideoInfo(width, height, fps, total)
+            )
         except Exception as exc:
             capture.release()
             return False, str(exc)
 
         if progress_cb:
-            progress_cb("Face detected. Processing video on this phone...", 1)
+            progress_cb(
+                "Face detected. Processing locally and encoding MP4...", 1
+            )
 
         target_rect: Optional[Rect] = None
         processed = 0
+        cancelled = False
+        encoder_error: Optional[str] = None
+
         try:
             while True:
                 if cancel_cb and cancel_cb():
-                    return False, "Cancelled"
+                    cancelled = True
+                    break
+
                 ok, frame = capture.read()
                 if not ok:
                     break
+
                 try:
                     swapped, target_rect = self.swap_face(
                         source,
@@ -358,14 +508,46 @@ class FaceSwapper:
                 except Exception:
                     swapped = frame
                     target_rect = None
-                writer.write(swapped)
+
+                try:
+                    if encoder.stdin is None:
+                        raise BrokenPipeError("FFmpeg frame pipe closed unexpectedly")
+                    encoder.stdin.write(
+                        np.ascontiguousarray(swapped, dtype=np.uint8).tobytes()
+                    )
+                except (BrokenPipeError, OSError) as exc:
+                    encoder_error = f"FFmpeg stopped while encoding: {exc}"
+                    break
+
                 processed += 1
-                if progress_cb and (processed == 1 or processed % max(1, total // 100) == 0):
+                if progress_cb and (
+                    processed == 1
+                    or processed % max(1, total // 100) == 0
+                ):
                     percent = min(99, max(1, int(processed * 100 / total)))
-                    progress_cb(f"Processing frame {processed} of about {total}", percent)
+                    progress_cb(
+                        f"Processing frame {processed} of about {total}", percent
+                    )
         finally:
             capture.release()
-            writer.release()
+
+        code, stderr = self._finish_ffmpeg(encoder)
+
+        if cancelled:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+            return False, "Cancelled"
+
+        if encoder_error:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+            if stderr:
+                encoder_error += f" ({stderr[-500:]})"
+            return False, encoder_error
 
         if processed == 0:
             try:
@@ -373,10 +555,24 @@ class FaceSwapper:
             except OSError:
                 pass
             return False, "No video frames were decoded"
-        if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
+
+        if code != 0:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+            detail = stderr[-700:] if stderr else f"exit code {code}"
+            return False, f"FFmpeg could not finalize the MP4: {detail}"
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) < 2048:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
             return False, "The output video was not created correctly"
+
         if progress_cb:
-            progress_cb("Face swap complete", 100)
+            progress_cb("Face swap complete. Audio preserved when available.", 100)
         return True, output_path
 
 
