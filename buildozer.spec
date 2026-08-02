@@ -5,7 +5,7 @@ package.domain = org.vaan.faceswap
 source.dir = .
 source.include_exts = py,xml,png,jpg,jpeg,kv,atlas,json
 source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests
-version = 1.3.0
+version = 1.3.1
 
 # FFmpeg + av_codecs gives the Android build a real H.264/AAC encoder instead
 # of depending on OpenCV VideoWriter codec availability.
