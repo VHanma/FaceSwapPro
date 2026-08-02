@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 import tempfile
@@ -11,7 +12,6 @@ from typing import Optional
 
 from kivy.app import App
 from kivy.clock import mainthread
-from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -21,15 +21,12 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.utils import platform
 
-Window.clearcolor = (0.035, 0.04, 0.065, 1)
-
 REQUEST_SOURCE = 4101
 REQUEST_VIDEO = 4102
 
 
 def _android_activity():
     from jnius import autoclass
-
     return autoclass("org.kivy.android.PythonActivity").mActivity
 
 
@@ -39,6 +36,33 @@ def _cache_dir() -> str:
     return tempfile.gettempdir()
 
 
+def _delete_quietly(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _uri_suffix(uri, fallback: str) -> str:
+    """Best-effort extension detection for a Storage Access Framework URI."""
+    if platform != "android":
+        return fallback
+    try:
+        mime = _android_activity().getContentResolver().getType(uri)
+        if mime:
+            mime = str(mime)
+            if mime == "image/jpeg":
+                return ".jpg"
+            if mime == "video/mp4":
+                return ".mp4"
+            return mimetypes.guess_extension(mime) or fallback
+    except Exception:
+        pass
+    return fallback
+
+
 def _copy_content_uri(uri, suffix: str) -> str:
     """Copy a Storage Access Framework URI into the app cache."""
     resolver = _android_activity().getContentResolver()
@@ -46,20 +70,34 @@ def _copy_content_uri(uri, suffix: str) -> str:
     if input_stream is None:
         raise OSError("Android could not open the selected file")
 
-    fd, destination = tempfile.mkstemp(prefix="faceswappro_", suffix=suffix, dir=_cache_dir())
+    fd, destination = tempfile.mkstemp(
+        prefix="faceswappro_", suffix=suffix, dir=_cache_dir()
+    )
     os.close(fd)
     buffer = bytearray(1024 * 1024)
+
     try:
         with open(destination, "wb") as output:
             while True:
                 count = input_stream.read(buffer)
-                if count is None or int(count) < 0:
+                if count is None:
                     break
-                if int(count) == 0:
+                count = int(count)
+                if count < 0:
+                    break
+                if count == 0:
                     continue
-                output.write(buffer[: int(count)])
+                output.write(buffer[:count])
+    except Exception:
+        _delete_quietly(destination)
+        raise
     finally:
         input_stream.close()
+
+    if not os.path.isfile(destination) or os.path.getsize(destination) <= 0:
+        _delete_quietly(destination)
+        raise OSError("The selected file copied as an empty file")
+
     return destination
 
 
@@ -68,14 +106,21 @@ def _publish_video(local_path: str, display_name: str) -> str:
     if platform != "android":
         return local_path
 
+    if not os.path.isfile(local_path):
+        raise OSError("Face engine did not create an output video")
+    if os.path.getsize(local_path) <= 0:
+        raise OSError("Face engine created an empty output video")
+
     from jnius import autoclass
 
     activity = _android_activity()
     resolver = activity.getContentResolver()
+
     ContentValues = autoclass("android.content.ContentValues")
     MediaStoreVideo = autoclass("android.provider.MediaStore$Video$Media")
     MediaColumns = autoclass("android.provider.MediaStore$MediaColumns")
     Environment = autoclass("android.os.Environment")
+    Integer = autoclass("java.lang.Integer")
 
     values = ContentValues()
     values.put(MediaColumns.DISPLAY_NAME, display_name)
@@ -84,35 +129,43 @@ def _publish_video(local_path: str, display_name: str) -> str:
         MediaColumns.RELATIVE_PATH,
         Environment.DIRECTORY_MOVIES + "/FaceSwapPro",
     )
-    values.put(MediaColumns.IS_PENDING, 1)
+    # PyJNIus cannot reliably choose the numeric ContentValues.put overload
+    # from a normal Python int, so box the value as java.lang.Integer.
+    values.put(MediaColumns.IS_PENDING, Integer.valueOf(1))
 
     uri = resolver.insert(MediaStoreVideo.EXTERNAL_CONTENT_URI, values)
     if uri is None:
         raise OSError("Android could not create the result in Movies")
 
-    output_stream = resolver.openOutputStream(uri)
-    if output_stream is None:
-        resolver.delete(uri, None, None)
-        raise OSError("Android could not open the result file")
-
     try:
-        with open(local_path, "rb") as source:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                output_stream.write(bytearray(chunk))
-        output_stream.flush()
-    except Exception:
-        resolver.delete(uri, None, None)
-        raise
-    finally:
-        output_stream.close()
+        output_stream = resolver.openOutputStream(uri)
+        if output_stream is None:
+            raise OSError("Android could not open the result file")
 
-    ready = ContentValues()
-    ready.put(MediaColumns.IS_PENDING, 0)
-    resolver.update(uri, ready, None, None)
-    return str(uri.toString())
+        try:
+            with open(local_path, "rb") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    output_stream.write(bytearray(chunk))
+            output_stream.flush()
+        finally:
+            output_stream.close()
+
+        ready = ContentValues()
+        ready.put(MediaColumns.IS_PENDING, Integer.valueOf(0))
+        updated = resolver.update(uri, ready, None, None)
+        if int(updated) <= 0:
+            raise OSError("Android copied the video but could not finalize it")
+
+        return str(uri.toString())
+    except Exception:
+        try:
+            resolver.delete(uri, None, None)
+        except Exception:
+            pass
+        raise
 
 
 class FaceSwapRoot(ScrollView):
@@ -135,20 +188,24 @@ class FaceSwapRoot(ScrollView):
 
         if platform == "android":
             from android import activity
-
             activity.bind(on_activity_result=self._on_activity_result)
 
     @staticmethod
     def _fixed_label(text: str, height: float, **kwargs) -> Label:
-        return Label(
+        label = Label(
             text=text,
             size_hint_y=None,
             height=height,
-            text_size=(Window.width - dp(44), None),
             halign="left",
             valign="middle",
             **kwargs,
         )
+        label.bind(
+            width=lambda instance, value: setattr(
+                instance, "text_size", (max(dp(20), value), None)
+            )
+        )
+        return label
 
     @staticmethod
     def _button(text: str, background, height=dp(54)) -> Button:
@@ -182,25 +239,38 @@ class FaceSwapRoot(ScrollView):
             )
         )
 
-        self.source_button = self._button("1. Choose source face photo", (0.10, 0.48, 0.86, 1))
+        self.source_button = self._button(
+            "1. Choose source face photo", (0.10, 0.48, 0.86, 1)
+        )
         self.source_button.bind(on_release=self.choose_source)
         self.content.add_widget(self.source_button)
         self.source_label = self._fixed_label(
-            "No source photo selected", dp(30), font_size=dp(12), color=(0.55, 0.58, 0.68, 1)
+            "No source photo selected",
+            dp(30),
+            font_size=dp(12),
+            color=(0.55, 0.58, 0.68, 1),
         )
         self.content.add_widget(self.source_label)
 
-        self.video_button = self._button("2. Choose target video", (0.08, 0.62, 0.39, 1))
+        self.video_button = self._button(
+            "2. Choose target video", (0.08, 0.62, 0.39, 1)
+        )
         self.video_button.bind(on_release=self.choose_video)
         self.content.add_widget(self.video_button)
         self.video_label = self._fixed_label(
-            "No target video selected", dp(30), font_size=dp(12), color=(0.55, 0.58, 0.68, 1)
+            "No target video selected",
+            dp(30),
+            font_size=dp(12),
+            color=(0.55, 0.58, 0.68, 1),
         )
         self.content.add_widget(self.video_label)
 
         self.content.add_widget(
             self._fixed_label(
-                "Result filename", dp(30), font_size=dp(13), color=(0.84, 0.87, 0.98, 1)
+                "Result filename",
+                dp(30),
+                font_size=dp(13),
+                color=(0.84, 0.87, 0.98, 1),
             )
         )
         self.output_name = TextInput(
@@ -217,29 +287,48 @@ class FaceSwapRoot(ScrollView):
         )
         self.content.add_widget(self.output_name)
 
-        self.run_button = self._button("START FACE SWAP", (0.82, 0.16, 0.20, 1), dp(66))
+        self.run_button = self._button(
+            "START FACE SWAP", (0.82, 0.16, 0.20, 1), dp(66)
+        )
         self.run_button.font_size = dp(21)
         self.run_button.bind(on_release=self.start_swap)
         self.content.add_widget(self.run_button)
 
-        self.cancel_button = self._button("Cancel", (0.30, 0.31, 0.38, 1), dp(48))
+        self.cancel_button = self._button(
+            "Cancel", (0.30, 0.31, 0.38, 1), dp(48)
+        )
         self.cancel_button.disabled = True
         self.cancel_button.bind(on_release=self.cancel_swap)
         self.content.add_widget(self.cancel_button)
 
         self.progress = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(18))
         self.content.add_widget(self.progress)
-        self.status = self._fixed_label(
-            "Ready. Clear, front-facing source photos give the strongest result.",
-            dp(130),
+
+        self.status = Label(
+            text="Ready. Clear, front-facing source photos give the strongest result.",
+            size_hint_y=None,
+            height=dp(90),
             font_size=dp(13),
             color=(0.75, 0.94, 0.78, 1),
+            halign="left",
+            valign="top",
         )
-        self.status.valign = "top"
+        self.status.bind(
+            width=lambda instance, value: setattr(
+                instance, "text_size", (max(dp(20), value), None)
+            )
+        )
+        self.status.bind(
+            texture_size=lambda instance, value: setattr(
+                instance, "height", max(dp(90), value[1] + dp(18))
+            )
+        )
         self.content.add_widget(self.status)
+
         self.content.add_widget(
             self._fixed_label(
-                "Results are saved to Movies/FaceSwapPro. Processing speed depends on video length and resolution. Output currently has video only.",
+                "Results are saved to Movies/FaceSwapPro. Processing speed depends on "
+                "video length and resolution. Output currently has video only.",
                 dp(90),
                 font_size=dp(12),
                 color=(0.60, 0.64, 0.75, 1),
@@ -250,12 +339,14 @@ class FaceSwapRoot(ScrollView):
         if platform != "android":
             self._set_status("File selection is enabled in the Android APK.", error=True)
             return
+
         from jnius import autoclass
 
         Intent = autoclass("android.content.Intent")
         intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
         intent.addCategory(Intent.CATEGORY_OPENABLE)
         intent.setType(mime_type)
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         _android_activity().startActivityForResult(intent, request_code)
 
     def choose_source(self, *_args) -> None:
@@ -267,21 +358,23 @@ class FaceSwapRoot(ScrollView):
     def _on_activity_result(self, request_code, result_code, data) -> None:
         if int(result_code) != -1 or data is None:
             return
+
         uri = data.getData()
         if uri is None:
             return
+
         if int(request_code) == REQUEST_SOURCE:
             self._set_source_label("Loading source photo...", ok=False)
             threading.Thread(
                 target=self._load_selection,
-                args=(uri, ".jpg", "source"),
+                args=(uri, _uri_suffix(uri, ".img"), "source"),
                 daemon=True,
             ).start()
         elif int(request_code) == REQUEST_VIDEO:
             self._set_video_label("Loading target video...", ok=False)
             threading.Thread(
                 target=self._load_selection,
-                args=(uri, ".mp4", "video"),
+                args=(uri, _uri_suffix(uri, ".video"), "video"),
                 daemon=True,
             ).start()
 
@@ -289,22 +382,32 @@ class FaceSwapRoot(ScrollView):
         try:
             path = _copy_content_uri(uri, suffix)
             if kind == "source":
+                old = self.source_image_path
                 self.source_image_path = path
+                _delete_quietly(old)
                 self._set_source_label("Source photo ready", ok=True)
             else:
+                old = self.target_video_path
                 self.target_video_path = path
+                _delete_quietly(old)
                 megabytes = os.path.getsize(path) / (1024 * 1024)
-                self._set_video_label(f"Target video ready ({megabytes:.1f} MB)", ok=True)
+                self._set_video_label(
+                    f"Target video ready ({megabytes:.1f} MB)", ok=True
+                )
         except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
             if kind == "source":
-                self._set_source_label(f"Could not load photo: {exc}", ok=False)
+                self._set_source_label(f"Could not load photo: {message}", ok=False)
             else:
-                self._set_video_label(f"Could not load video: {exc}", ok=False)
+                self._set_video_label(f"Could not load video: {message}", ok=False)
 
     @staticmethod
     def _safe_filename(text: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip()).strip("._")
-        return (cleaned or "faceswap_result")[:80] + ".mp4"
+        if cleaned.lower().endswith(".mp4"):
+            cleaned = cleaned[:-4].rstrip("._")
+        cleaned = cleaned or "faceswap_result"
+        return cleaned[:80] + ".mp4"
 
     def start_swap(self, *_args) -> None:
         if self._working:
@@ -316,33 +419,41 @@ class FaceSwapRoot(ScrollView):
             self._set_status("Choose a target video first.", error=True)
             return
 
+        # Capture widget values before the worker starts.
+        filename = self._safe_filename(self.output_name.text)
+        source_path = self.source_image_path
+        video_path = self.target_video_path
+
         self._cancel_event.clear()
         self._working = True
         self._set_controls(working=True)
         self._set_progress(0)
         self._set_status("Loading the offline face engine...", error=False)
-        threading.Thread(target=self._swap_worker, daemon=True).start()
+
+        threading.Thread(
+            target=self._swap_worker,
+            args=(source_path, video_path, filename),
+            daemon=True,
+        ).start()
 
     def cancel_swap(self, *_args) -> None:
         if self._working:
             self._cancel_event.set()
             self._set_status("Stopping after the current frame...", error=False)
 
-    def _swap_worker(self) -> None:
+    def _swap_worker(
+        self, source_path: str, video_path: str, filename: str
+    ) -> None:
         local_output = None
         try:
             from faceswap import process_video
 
-            filename = self._safe_filename(self.output_name.text)
             local_output = os.path.join(_cache_dir(), "result_" + filename)
-            try:
-                os.remove(local_output)
-            except OSError:
-                pass
+            _delete_quietly(local_output)
 
             ok, result = process_video(
-                self.source_image_path,
-                self.target_video_path,
+                source_path,
+                video_path,
                 local_output,
                 progress_cb=self._engine_progress,
                 cancel_cb=self._cancel_event.is_set,
@@ -354,7 +465,15 @@ class FaceSwapRoot(ScrollView):
                     self._set_status(f"Face swap failed: {result}", error=True)
                 return
 
-            self._set_status("Processing finished. Saving to Movies/FaceSwapPro...", error=False)
+            if not os.path.isfile(local_output) or os.path.getsize(local_output) <= 0:
+                raise OSError(
+                    "Face engine reported success but produced no usable output video"
+                )
+
+            self._set_status(
+                "Processing finished. Saving to Movies/FaceSwapPro...",
+                error=False,
+            )
             saved_uri = _publish_video(local_output, filename)
             self._set_progress(100)
             self._set_status(
@@ -362,34 +481,42 @@ class FaceSwapRoot(ScrollView):
                 error=False,
             )
         except Exception as exc:
-            self._set_status(f"Unexpected error: {type(exc).__name__}: {exc}", error=True)
+            self._set_status(
+                f"Unexpected error: {type(exc).__name__}: {exc}", error=True
+            )
         finally:
-            if local_output:
-                try:
-                    os.remove(local_output)
-                except OSError:
-                    pass
-            self._working = False
-            self._set_controls(working=False)
+            _delete_quietly(local_output)
+            self._finish_work()
 
     def _engine_progress(self, message: str, percent: int) -> None:
         self._set_progress(percent)
         self._set_status(message, error=False)
 
     @mainthread
+    def _finish_work(self) -> None:
+        self._working = False
+        self._set_controls(working=False)
+
+    @mainthread
     def _set_source_label(self, text: str, ok: bool) -> None:
         self.source_label.text = text
-        self.source_label.color = (0.35, 1.0, 0.47, 1) if ok else (1.0, 0.58, 0.35, 1)
+        self.source_label.color = (
+            (0.35, 1.0, 0.47, 1) if ok else (1.0, 0.58, 0.35, 1)
+        )
 
     @mainthread
     def _set_video_label(self, text: str, ok: bool) -> None:
         self.video_label.text = text
-        self.video_label.color = (0.35, 1.0, 0.47, 1) if ok else (1.0, 0.58, 0.35, 1)
+        self.video_label.color = (
+            (0.35, 1.0, 0.47, 1) if ok else (1.0, 0.58, 0.35, 1)
+        )
 
     @mainthread
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status.text = text
-        self.status.color = (1.0, 0.48, 0.42, 1) if error else (0.75, 0.94, 0.78, 1)
+        self.status.color = (
+            (1.0, 0.48, 0.42, 1) if error else (0.75, 0.94, 0.78, 1)
+        )
 
     @mainthread
     def _set_progress(self, value: int) -> None:
@@ -403,12 +530,22 @@ class FaceSwapRoot(ScrollView):
         self.output_name.disabled = working
         self.cancel_button.disabled = not working
 
+    def cleanup_cache_selections(self) -> None:
+        _delete_quietly(self.source_image_path)
+        _delete_quietly(self.target_video_path)
+        self.source_image_path = None
+        self.target_video_path = None
+
 
 class FaceSwapProApp(App):
     title = "FaceSwap Pro"
 
     def build(self):
         return FaceSwapRoot()
+
+    def on_stop(self):
+        if isinstance(self.root, FaceSwapRoot):
+            self.root.cleanup_cache_selections()
 
 
 if __name__ == "__main__":
