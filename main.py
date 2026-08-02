@@ -120,7 +120,6 @@ def _publish_video(local_path: str, display_name: str) -> str:
     MediaStoreVideo = autoclass("android.provider.MediaStore$Video$Media")
     MediaColumns = autoclass("android.provider.MediaStore$MediaColumns")
     Environment = autoclass("android.os.Environment")
-    Integer = autoclass("java.lang.Integer")
 
     values = ContentValues()
     values.put(MediaColumns.DISPLAY_NAME, display_name)
@@ -129,10 +128,11 @@ def _publish_video(local_path: str, display_name: str) -> str:
         MediaColumns.RELATIVE_PATH,
         Environment.DIRECTORY_MOVIES + "/FaceSwapPro",
     )
-    # PyJNIus cannot reliably choose the numeric ContentValues.put overload
-    # from a normal Python int, so box the value as java.lang.Integer.
-    values.put(MediaColumns.IS_PENDING, Integer.valueOf(1))
 
+    # Do not set MediaColumns.IS_PENDING here. PyJNIus overload resolution for
+    # ContentValues.put(String, Integer) is inconsistent across Android builds
+    # and caused the exact JavaException seen on-device. IS_PENDING is optional
+    # for inserting a new MediaStore item, so direct insert/write is safer.
     uri = resolver.insert(MediaStoreVideo.EXTERNAL_CONTENT_URI, values)
     if uri is None:
         raise OSError("Android could not create the result in Movies")
@@ -152,12 +152,6 @@ def _publish_video(local_path: str, display_name: str) -> str:
             output_stream.flush()
         finally:
             output_stream.close()
-
-        ready = ContentValues()
-        ready.put(MediaColumns.IS_PENDING, Integer.valueOf(0))
-        updated = resolver.update(uri, ready, None, None)
-        if int(updated) <= 0:
-            raise OSError("Android copied the video but could not finalize it")
 
         return str(uri.toString())
     except Exception:
@@ -328,7 +322,7 @@ class FaceSwapRoot(ScrollView):
         self.content.add_widget(
             self._fixed_label(
                 "Results are saved to Movies/FaceSwapPro. Processing speed depends on "
-                "video length and resolution. Output currently has video only.",
+                "video length and resolution. Source audio is preserved when available.",
                 dp(90),
                 font_size=dp(12),
                 color=(0.60, 0.64, 0.75, 1),
