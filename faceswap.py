@@ -377,6 +377,8 @@ class FaceSwapper:
             "0:v:0",
             "-map",
             "1:a:0?",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v",
             "libx264",
             "-preset",
@@ -458,13 +460,25 @@ class FaceSwapper:
         if not capture.isOpened():
             return False, "The selected video could not be opened"
 
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Android/OpenCV can report 0x0 metadata even when frames decode correctly.
+        # Decode one real frame first and derive dimensions from pixels instead of
+        # rejecting a valid phone video based only on container metadata.
+        first_ok, first_frame = capture.read()
+        if (
+            not first_ok
+            or first_frame is None
+            or first_frame.size == 0
+            or first_frame.ndim < 2
+        ):
+            capture.release()
+            return False, "No video frames were decoded"
+
+        height, width = first_frame.shape[:2]
         fps = float(capture.get(cv2.CAP_PROP_FPS))
         total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         if width <= 0 or height <= 0:
             capture.release()
-            return False, "The selected video has invalid dimensions"
+            return False, "The decoded video frame has invalid dimensions"
         if not np.isfinite(fps) or fps <= 1.0 or fps > 240.0:
             fps = 30.0
         total = max(total, 1)
@@ -489,13 +503,10 @@ class FaceSwapper:
         encoder_error: Optional[str] = None
 
         try:
+            frame = first_frame
             while True:
                 if cancel_cb and cancel_cb():
                     cancelled = True
-                    break
-
-                ok, frame = capture.read()
-                if not ok:
                     break
 
                 try:
@@ -528,6 +539,10 @@ class FaceSwapper:
                     progress_cb(
                         f"Processing frame {processed} of about {total}", percent
                     )
+
+                ok, frame = capture.read()
+                if not ok:
+                    break
         finally:
             capture.release()
 
