@@ -3,14 +3,15 @@ name: Build working FaceSwap Pro APK
 on:
   workflow_dispatch:
   push:
-    branches: [master, main, install-ready, apk-build]
-    paths:
-      - "**.py"
-      - "assets/**"
-      - "buildozer.spec"
-      - ".github/workflows/build_apk.yml"
+    branches:
+      - master
+      - main
+      - install-ready
+      - apk-build
+      - 'fix/**'
   pull_request:
-    branches: [master]
+    branches:
+      - master
 
 concurrency:
   group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
@@ -30,12 +31,12 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install Android build prerequisites
         run: |
@@ -69,7 +70,7 @@ jobs:
 
       - name: Build debug APK
         env:
-          USE_CCACHE: "1"
+          USE_CCACHE: '1'
           CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           yes | buildozer -v android debug
