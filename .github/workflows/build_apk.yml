@@ -93,3 +93,5 @@ jobs:
             APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
+
+# Forced rebuild for expression-aware blending branch
