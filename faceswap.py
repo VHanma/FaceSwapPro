@@ -1,9 +1,9 @@
 """Offline face-swap engine for FaceSwap Pro.
 
-A source face is warped onto the largest face found in each video frame and
-blended with OpenCV. Final MP4 encoding is handled by the FFmpeg executable
-bundled by python-for-android so Android does not depend on OpenCV VideoWriter
-codec support. No server, account, API key, or network connection is required.
+Expression-aware, dependency-light face reenactment for Android. The source
+identity is warped onto the target face with image-derived eye and mouth
+landmarks, target lighting/detail is reintroduced for natural expressions, and
+FFmpeg handles final H.264/AAC MP4 encoding.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _cascade_path() -> str:
 
 
 class FaceSwapper:
-    """Fast, dependency-light face swapping suitable for an Android build."""
+    """Offline face swapper with expression-aware geometry and soft blending."""
 
     def __init__(self, detection_width: int = 640) -> None:
         self.detection_width = max(240, int(detection_width))
@@ -51,6 +51,8 @@ class FaceSwapper:
         self.cascade = cv2.CascadeClassifier(cascade_path) if cascade_path else None
         if self.cascade is not None and self.cascade.empty():
             self.cascade = None
+        self._previous_target_points: Optional[np.ndarray] = None
+        self._previous_target_rect: Optional[Rect] = None
 
     def detect_face(
         self, image: np.ndarray, previous: Optional[Rect] = None
@@ -107,15 +109,12 @@ class FaceSwapper:
 
     @staticmethod
     def _skin_face_candidates(image: np.ndarray) -> list[Rect]:
-        """Model-free backup used only when the bundled cascade is unavailable."""
         ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
         mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 180, 135))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         height, width = image.shape[:2]
         minimum_area = width * height * 0.008
         candidates: list[Rect] = []
@@ -139,50 +138,168 @@ class FaceSwapper:
         return inter / union if union else 0.0
 
     @staticmethod
-    def _landmarks(rect: Rect, shape: Sequence[int]) -> np.ndarray:
-        """Stable pseudo-landmarks derived from a detected face rectangle."""
+    def _clip_roi(rect: Rect, shape: Sequence[int]) -> Rect:
         x, y, w, h = rect
-        image_h, image_w = shape[:2]
+        ih, iw = shape[:2]
+        x = max(0, min(int(x), iw - 1))
+        y = max(0, min(int(y), ih - 1))
+        w = max(1, min(int(w), iw - x))
+        h = max(1, min(int(h), ih - y))
+        return x, y, w, h
 
-        normalized = np.array(
-            [
-                (0.18, 0.12),
-                (0.35, 0.04),
-                (0.50, 0.01),
-                (0.65, 0.04),
-                (0.82, 0.12),
-                (0.05, 0.28),
-                (0.02, 0.48),
-                (0.08, 0.70),
-                (0.22, 0.88),
-                (0.50, 0.98),
-                (0.78, 0.88),
-                (0.92, 0.70),
-                (0.98, 0.48),
-                (0.95, 0.28),
-                (0.25, 0.30),
-                (0.40, 0.30),
-                (0.60, 0.30),
-                (0.75, 0.30),
-                (0.30, 0.40),
-                (0.70, 0.40),
-                (0.50, 0.36),
-                (0.50, 0.56),
-                (0.41, 0.62),
-                (0.59, 0.62),
-                (0.34, 0.73),
-                (0.50, 0.70),
-                (0.66, 0.73),
-                (0.50, 0.82),
-            ],
-            dtype=np.float32,
-        )
-        pts = np.empty_like(normalized)
-        pts[:, 0] = x + normalized[:, 0] * w
-        pts[:, 1] = y + normalized[:, 1] * h
-        pts[:, 0] = np.clip(pts[:, 0], 0, image_w - 1)
-        pts[:, 1] = np.clip(pts[:, 1], 0, image_h - 1)
-        return np.rint(pts).astype(np.int32)
+    @staticmethod
+    def _weighted_dark_center(gray: np.ndarray) -> tuple[float, float, float, float]:
+        """Return dark-feature center and spread in ROI coordinates."""
+        if gray.size == 0:
+            return 0.5, 0.5, 0.25, 0.10
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        dark = 255.0 - blur.astype(np.float32)
+        gx = cv2.Sobel(blur, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(blur, cv2.CV_32F, 0, 1, ksize=3)
+        score = dark + 0.20 * cv2.magnitude(gx, gy)
+        threshold = float(np.percentile(score, 72.0))
+        weights = np.where(score >= threshold, score - threshold + 1.0, 0.0)
+        total = float(weights.sum())
+        h, w = gray.shape[:2]
+        if total <= 1e-6:
+            return w * 0.5, h * 0.5, w * 0.28, h * 0.18
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        cx = float((xx * weights).sum() / total)
+        cy = float((yy * weights).sum() / total)
+        sx = float(np.sqrt(max(1.0, (((xx - cx) ** 2) * weights).sum() / total)))
+        sy = float(np.sqrt(max(1.0, (((yy - cy) ** 2) * weights).sum() / total)))
+        return cx, cy, sx, sy
+
+    def _eye_geometry(
+        self, image: np.ndarray, rect: Rect, left: bool
+    ) -> tuple[float, float, float, float]:
+        x, y, w, h = rect
+        fx0, fx1 = (0.10, 0.49) if left else (0.51, 0.90)
+        rx = int(x + fx0 * w)
+        ry = int(y + 0.20 * h)
+        rw = max(4, int((fx1 - fx0) * w))
+        rh = max(4, int(0.30 * h))
+        rx, ry, rw, rh = self._clip_roi((rx, ry, rw, rh), image.shape)
+        roi = image[ry : ry + rh, rx : rx + rw]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        cx, cy, sx, sy = self._weighted_dark_center(gray)
+        center_x = rx + cx
+        center_y = ry + cy
+        half_w = float(np.clip(sx * 1.35, w * 0.055, w * 0.115))
+        half_h = float(np.clip(sy * 0.95, h * 0.018, h * 0.065))
+        return center_x, center_y, half_w, half_h
+
+    def _mouth_geometry(
+        self, image: np.ndarray, rect: Rect
+    ) -> tuple[float, float, float, float, float]:
+        x, y, w, h = rect
+        rx = int(x + 0.16 * w)
+        ry = int(y + 0.53 * h)
+        rw = max(6, int(0.68 * w))
+        rh = max(6, int(0.37 * h))
+        rx, ry, rw, rh = self._clip_roi((rx, ry, rw, rh), image.shape)
+        roi = image[ry : ry + rh, rx : rx + rw]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        b, g, r = cv2.split(roi.astype(np.float32))
+        redness = np.maximum(0.0, r - 0.5 * (g + b))
+        dark = 255.0 - gray
+        score = dark * 0.72 + redness * 0.85
+        score = cv2.GaussianBlur(score, (5, 5), 0)
+        threshold = float(np.percentile(score, 76.0))
+        mask = (score >= threshold).astype(np.uint8) * 255
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        best = None
+        best_score = -1.0
+        for contour in contours:
+            bx, by, bw, bh = cv2.boundingRect(contour)
+            area = float(bw * bh)
+            if area <= 0 or bw < rw * 0.12:
+                continue
+            center_bias = 1.0 - abs((bx + bw * 0.5) / rw - 0.5)
+            lower_bias = (by + bh * 0.5) / max(1.0, rh)
+            candidate_score = area * (0.8 + center_bias) * (0.7 + lower_bias)
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best = (bx, by, bw, bh)
+
+        if best is None:
+            cx = rx + rw * 0.5
+            cy = ry + rh * 0.54
+            half_w = w * 0.20
+            half_h = h * 0.035
+        else:
+            bx, by, bw, bh = best
+            cx = rx + bx + bw * 0.5
+            cy = ry + by + bh * 0.5
+            half_w = float(np.clip(bw * 0.72, w * 0.14, w * 0.29))
+            half_h = float(np.clip(bh * 0.72, h * 0.025, h * 0.12))
+
+        mx0 = max(0, int(cx - half_w * 0.60))
+        mx1 = min(image.shape[1], int(cx + half_w * 0.60))
+        my0 = max(0, int(cy - half_h * 0.65))
+        my1 = min(image.shape[0], int(cy + half_h * 0.65))
+        center_patch = cv2.cvtColor(image[my0:my1, mx0:mx1], cv2.COLOR_BGR2GRAY)
+        if center_patch.size:
+            darkness = float(1.0 - center_patch.mean() / 255.0)
+        else:
+            darkness = 0.25
+        openness = float(np.clip((half_h / max(1.0, h * 0.10)) * (0.7 + darkness), 0.18, 1.25))
+        return cx, cy, half_w, half_h, openness
+
+    def _landmarks(self, image: np.ndarray, rect: Rect) -> np.ndarray:
+        """Image-derived landmarks that react to blinking, smiling and talking."""
+        x, y, w, h = rect
+        ih, iw = image.shape[:2]
+        lex, ley, lew, leh = self._eye_geometry(image, rect, True)
+        rex, rey, rew, reh = self._eye_geometry(image, rect, False)
+        mx, my, mw, mh, openness = self._mouth_geometry(image, rect)
+
+        pts = [
+            (x + 0.18*w, y + 0.12*h), (x + 0.35*w, y + 0.045*h),
+            (x + 0.50*w, y + 0.020*h), (x + 0.65*w, y + 0.045*h),
+            (x + 0.82*w, y + 0.12*h), (x + 0.055*w, y + 0.29*h),
+            (x + 0.025*w, y + 0.49*h), (x + 0.085*w, y + 0.70*h),
+            (x + 0.23*w, y + 0.88*h), (x + 0.50*w, y + 0.985*h),
+            (x + 0.77*w, y + 0.88*h), (x + 0.915*w, y + 0.70*h),
+            (x + 0.975*w, y + 0.49*h), (x + 0.945*w, y + 0.29*h),
+            (lex - 1.10*lew, ley - 1.55*leh), (lex, ley - 1.75*leh),
+            (lex + 1.10*lew, ley - 1.55*leh),
+            (rex - 1.10*rew, rey - 1.55*reh), (rex, rey - 1.75*reh),
+            (rex + 1.10*rew, rey - 1.55*reh),
+            (lex - lew, ley), (lex - 0.45*lew, ley - leh),
+            (lex + 0.45*lew, ley - leh), (lex + lew, ley),
+            (lex + 0.45*lew, ley + leh), (lex - 0.45*lew, ley + leh),
+            (rex - rew, rey), (rex - 0.45*rew, rey - reh),
+            (rex + 0.45*rew, rey - reh), (rex + rew, rey),
+            (rex + 0.45*rew, rey + reh), (rex - 0.45*rew, rey + reh),
+            (x + 0.50*w, y + 0.36*h), (x + 0.46*w, y + 0.55*h),
+            (x + 0.54*w, y + 0.55*h), (x + 0.50*w, y + 0.64*h),
+            (mx - mw, my), (mx - 0.55*mw, my - mh), (mx, my - 1.05*mh),
+            (mx + 0.55*mw, my - mh), (mx + mw, my),
+            (mx + 0.55*mw, my + mh*openness), (mx, my + 1.05*mh*openness),
+            (mx - 0.55*mw, my + mh*openness), (mx, my),
+        ]
+        array = np.asarray(pts, dtype=np.float32)
+        array[:, 0] = np.clip(array[:, 0], 0, iw - 1)
+        array[:, 1] = np.clip(array[:, 1], 0, ih - 1)
+        return array
+
+    def _smooth_target_points(self, points: np.ndarray, rect: Rect) -> np.ndarray:
+        if (
+            self._previous_target_points is None
+            or self._previous_target_points.shape != points.shape
+            or self._previous_target_rect is None
+            or self._iou(rect, self._previous_target_rect) < 0.20
+        ):
+            smooth = points
+        else:
+            smooth = self._previous_target_points * 0.58 + points * 0.42
+        self._previous_target_points = smooth.copy()
+        self._previous_target_rect = rect
+        return smooth
 
     @staticmethod
     def _color_match(source: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -196,13 +313,9 @@ class FaceSwapper:
             src_std_f = max(float(src_std.ravel()[0]), 1.0)
             tgt_mean_f = float(tgt_mean.ravel()[0])
             tgt_std_f = max(float(tgt_std.ravel()[0]), 1.0)
-            output[:, :, channel] = (
-                (output[:, :, channel] - src_mean_f) * (tgt_std_f / src_std_f)
-                + tgt_mean_f
-            )
-        return cv2.cvtColor(
-            np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR
-        )
+            ratio = float(np.clip(tgt_std_f / src_std_f, 0.55, 1.80))
+            output[:, :, channel] = (output[:, :, channel] - src_mean_f) * ratio + tgt_mean_f
+        return cv2.cvtColor(np.clip(output, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     @staticmethod
     def _warp_triangle(
@@ -215,44 +328,26 @@ class FaceSwapper:
         dst_rect = cv2.boundingRect(np.float32([destination_triangle]))
         if min(src_rect[2], src_rect[3], dst_rect[2], dst_rect[3]) <= 1:
             return
-
         sx, sy, sw, sh = src_rect
         dx, dy, dw, dh = dst_rect
         src_crop = source[sy : sy + sh, sx : sx + sw]
         dst_crop = destination[dy : dy + dh, dx : dx + dw]
         if src_crop.size == 0 or dst_crop.size == 0:
             return
-
-        src_local = np.float32(
-            [(p[0] - sx, p[1] - sy) for p in source_triangle]
-        )
-        dst_local = np.float32(
-            [(p[0] - dx, p[1] - dy) for p in destination_triangle]
-        )
+        src_local = np.float32([(p[0] - sx, p[1] - sy) for p in source_triangle])
+        dst_local = np.float32([(p[0] - dx, p[1] - dy) for p in destination_triangle])
         transform = cv2.getAffineTransform(src_local, dst_local)
         warped = cv2.warpAffine(
-            src_crop,
-            transform,
-            (dw, dh),
-            flags=cv2.INTER_LINEAR,
+            src_crop, transform, (dw, dh), flags=cv2.INTER_CUBIC,
             borderMode=cv2.BORDER_REFLECT_101,
         )
         mask = np.zeros((dh, dw, 3), dtype=np.float32)
-        cv2.fillConvexPoly(
-            mask, np.int32(dst_local), (1.0, 1.0, 1.0), lineType=cv2.LINE_AA
-        )
-        mixed = (
-            dst_crop.astype(np.float32) * (1.0 - mask)
-            + warped.astype(np.float32) * mask
-        )
-        destination[dy : dy + dh, dx : dx + dw] = np.clip(
-            mixed, 0, 255
-        ).astype(np.uint8)
+        cv2.fillConvexPoly(mask, np.int32(dst_local), (1.0, 1.0, 1.0), lineType=cv2.LINE_AA)
+        mixed = dst_crop.astype(np.float32) * (1.0 - mask) + warped.astype(np.float32) * mask
+        destination[dy : dy + dh, dx : dx + dw] = np.clip(mixed, 0, 255).astype(np.uint8)
 
     @staticmethod
-    def _triangle_indices(
-        points: np.ndarray, shape: Sequence[int]
-    ) -> list[tuple[int, int, int]]:
+    def _triangle_indices(points: np.ndarray, shape: Sequence[int]) -> list[tuple[int, int, int]]:
         height, width = shape[:2]
         subdivision = cv2.Subdiv2D((0, 0, width, height))
         for point in points:
@@ -260,26 +355,107 @@ class FaceSwapper:
                 subdivision.insert((float(point[0]), float(point[1])))
             except cv2.error:
                 pass
-
         triangles: list[tuple[int, int, int]] = []
+        p32 = points.astype(np.float32)
         for raw in subdivision.getTriangleList():
-            triangle_points = np.array(
-                [[raw[0], raw[1]], [raw[2], raw[3]], [raw[4], raw[5]]],
-                dtype=np.float32,
-            )
+            triangle_points = np.array([[raw[0], raw[1]], [raw[2], raw[3]], [raw[4], raw[5]]], dtype=np.float32)
             indices: list[int] = []
             for triangle_point in triangle_points:
-                distances = np.linalg.norm(
-                    points.astype(np.float32) - triangle_point, axis=1
-                )
+                distances = np.linalg.norm(p32 - triangle_point, axis=1)
                 index = int(np.argmin(distances))
-                if distances[index] <= 3.0:
+                if distances[index] <= 3.5:
                     indices.append(index)
             if len(indices) == 3 and len(set(indices)) == 3:
                 candidate = tuple(indices)
                 if candidate not in triangles:
                     triangles.append(candidate)
         return triangles
+
+    @staticmethod
+    def _soft_face_mask(points: np.ndarray, shape: Sequence[int], face_width: int) -> np.ndarray:
+        mask = np.zeros(shape[:2], dtype=np.uint8)
+        hull = cv2.convexHull(np.rint(points[:14]).astype(np.int32))
+        cv2.fillConvexPoly(mask, hull, 255, lineType=cv2.LINE_AA)
+        erode_px = max(1, int(face_width * 0.018))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_px * 2 + 1, erode_px * 2 + 1))
+        mask = cv2.erode(mask, kernel, iterations=1)
+        blur = max(9, int(face_width * 0.11))
+        if blur % 2 == 0:
+            blur += 1
+        return cv2.GaussianBlur(mask, (blur, blur), 0)
+
+    @staticmethod
+    def _ellipse_mask(shape: Sequence[int], center: tuple[float, float], axes: tuple[float, float], blur: int) -> np.ndarray:
+        mask = np.zeros(shape[:2], dtype=np.uint8)
+        cx, cy = int(round(center[0])), int(round(center[1]))
+        ax = max(1, int(round(axes[0])))
+        ay = max(1, int(round(axes[1])))
+        cv2.ellipse(mask, (cx, cy), (ax, ay), 0, 0, 360, 255, -1, lineType=cv2.LINE_AA)
+        blur = max(3, blur | 1)
+        return cv2.GaussianBlur(mask, (blur, blur), 0)
+
+    def _restore_expression_detail(
+        self, swapped: np.ndarray, target: np.ndarray, points: np.ndarray, rect: Rect
+    ) -> np.ndarray:
+        """Transfer target eyelid/mouth/crease detail without pasting target skin."""
+        x, y, w, h = rect
+        out = swapped.astype(np.float32)
+        target_f = target.astype(np.float32)
+        low = cv2.GaussianBlur(target_f, (0, 0), sigmaX=max(1.2, w * 0.012))
+        detail = target_f - low
+
+        masks = []
+        for start in (20, 26):
+            eye = points[start : start + 6]
+            ex, ey = eye.mean(axis=0)
+            ew = max(2.0, float(np.ptp(eye[:, 0])) * 0.70)
+            eh = max(2.0, float(np.ptp(eye[:, 1])) * 1.10)
+            masks.append(self._ellipse_mask(target.shape, (ex, ey), (ew, eh), max(5, int(w * 0.035))))
+
+        mouth_pts = points[36:44]
+        mx, my = mouth_pts.mean(axis=0)
+        mw = max(3.0, float(np.ptp(mouth_pts[:, 0])) * 0.65)
+        mh = max(2.0, float(np.ptp(mouth_pts[:, 1])) * 0.75)
+        mouth_mask = self._ellipse_mask(target.shape, (mx, my), (mw, mh), max(7, int(w * 0.045)))
+        masks.append(mouth_mask)
+
+        crease_mask = np.zeros(target.shape[:2], dtype=np.uint8)
+        brow_poly = np.rint(points[14:20]).astype(np.int32)
+        if len(brow_poly) >= 3:
+            cv2.fillConvexPoly(crease_mask, cv2.convexHull(brow_poly), 180, lineType=cv2.LINE_AA)
+        cheek_y = int(y + h * 0.58)
+        cv2.ellipse(crease_mask, (int(x + w*0.30), cheek_y), (max(2,int(w*0.16)), max(2,int(h*0.10))), 0, 0, 360, 90, -1)
+        cv2.ellipse(crease_mask, (int(x + w*0.70), cheek_y), (max(2,int(w*0.16)), max(2,int(h*0.10))), 0, 0, 360, 90, -1)
+        blur = max(5, int(w * 0.045)) | 1
+        crease_mask = cv2.GaussianBlur(crease_mask, (blur, blur), 0)
+
+        detail_alpha = crease_mask.astype(np.float32) / 255.0 * 0.28
+        for m in masks[:2]:
+            detail_alpha = np.maximum(detail_alpha, m.astype(np.float32) / 255.0 * 0.58)
+        detail_alpha = np.maximum(detail_alpha, mouth_mask.astype(np.float32) / 255.0 * 0.72)
+        out += detail * detail_alpha[:, :, None]
+
+        face_gray = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
+        face_patch = face_gray[max(0,y):min(target.shape[0],y+h), max(0,x):min(target.shape[1],x+w)]
+        threshold = float(np.percentile(face_patch, 28)) if face_patch.size else 70.0
+        interior = (face_gray < threshold).astype(np.float32)
+        interior *= mouth_mask.astype(np.float32) / 255.0
+        interior = cv2.GaussianBlur(interior, (5, 5), 0)
+        mouth_mix = np.clip(interior * 0.42, 0.0, 0.42)[:, :, None]
+        out = out * (1.0 - mouth_mix) + target_f * mouth_mix
+        return np.clip(out, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _transfer_target_lighting(swapped: np.ndarray, target: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Use target low-frequency luminance so the new face belongs in the shot."""
+        s_lab = cv2.cvtColor(swapped, cv2.COLOR_BGR2LAB).astype(np.float32)
+        t_lab = cv2.cvtColor(target, cv2.COLOR_BGR2LAB).astype(np.float32)
+        target_l = cv2.GaussianBlur(t_lab[:, :, 0], (0, 0), 9.0)
+        source_l = cv2.GaussianBlur(s_lab[:, :, 0], (0, 0), 9.0)
+        delta = np.clip(target_l - source_l, -35.0, 35.0)
+        alpha = (mask.astype(np.float32) / 255.0) * 0.62
+        s_lab[:, :, 0] = np.clip(s_lab[:, :, 0] + delta * alpha, 0, 255)
+        return cv2.cvtColor(s_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def swap_face(
         self,
@@ -297,8 +473,8 @@ class FaceSwapper:
         if target_rect is None:
             return target_frame.copy(), None
 
-        source_points = self._landmarks(source_rect, source_image.shape)
-        target_points = self._landmarks(target_rect, target_frame.shape)
+        source_points = self._landmarks(source_image, source_rect)
+        target_points = self._smooth_target_points(self._landmarks(target_frame, target_rect), target_rect)
 
         sx, sy, sw, sh = source_rect
         tx, ty, tw, th = target_rect
@@ -306,17 +482,11 @@ class FaceSwapper:
         target_crop = target_frame[ty : ty + th, tx : tx + tw]
         color_source = source_image.copy()
         if source_crop.size and target_crop.size:
-            resized_target = cv2.resize(
-                target_crop, (sw, sh), interpolation=cv2.INTER_AREA
-            )
-            color_source[sy : sy + sh, sx : sx + sw] = self._color_match(
-                source_crop, resized_target
-            )
+            resized_target = cv2.resize(target_crop, (sw, sh), interpolation=cv2.INTER_AREA)
+            color_source[sy : sy + sh, sx : sx + sw] = self._color_match(source_crop, resized_target)
 
         result = target_frame.copy()
-        for i1, i2, i3 in self._triangle_indices(
-            target_points, target_frame.shape
-        ):
+        for i1, i2, i3 in self._triangle_indices(target_points, target_frame.shape):
             self._warp_triangle(
                 color_source,
                 result,
@@ -324,10 +494,18 @@ class FaceSwapper:
                 target_points[[i1, i2, i3]],
             )
 
-        hull = cv2.convexHull(target_points)
-        mask = np.zeros(target_frame.shape[:2], dtype=np.uint8)
-        cv2.fillConvexPoly(mask, hull, 255, lineType=cv2.LINE_AA)
-        mask = cv2.GaussianBlur(mask, (11, 11), 0)
+        soft_mask = self._soft_face_mask(target_points, target_frame.shape, tw)
+        result = self._transfer_target_lighting(result, target_frame, soft_mask)
+        result = self._restore_expression_detail(result, target_frame, target_points, target_rect)
+
+        alpha = (soft_mask.astype(np.float32) / 255.0)[:, :, None]
+        feathered = np.clip(
+            result.astype(np.float32) * alpha
+            + target_frame.astype(np.float32) * (1.0 - alpha),
+            0,
+            255,
+        ).astype(np.uint8)
+        clone_mask = np.where(soft_mask > 32, 255, 0).astype(np.uint8)
         center = (int(tx + tw / 2), int(ty + th / 2))
         center = (
             min(max(center[0], 1), target_frame.shape[1] - 2),
@@ -335,66 +513,34 @@ class FaceSwapper:
         )
         try:
             blended = cv2.seamlessClone(
-                result, target_frame, mask, center, cv2.NORMAL_CLONE
+                feathered, target_frame, clone_mask, center, cv2.MIXED_CLONE
+            )
+            blended = self._restore_expression_detail(
+                blended, target_frame, target_points, target_rect
             )
         except cv2.error:
-            alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
-            blended = np.clip(
-                result * alpha + target_frame * (1.0 - alpha), 0, 255
-            ).astype(np.uint8)
+            blended = feathered
         return blended, target_rect
 
     @staticmethod
     def _ffmpeg_binary() -> str:
-        """Return the p4a-bundled FFmpeg executable, or the desktop one."""
         return shutil.which("ffmpeg") or "ffmpeg"
 
     @classmethod
     def _open_ffmpeg_writer(
         cls, output_path: str, source_video: str, info: VideoInfo
     ) -> subprocess.Popen:
-        """Encode raw BGR frames to H.264 MP4 and preserve source audio if present."""
         ffmpeg = cls._ffmpeg_binary()
         command = [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgr24",
-            "-s:v",
-            f"{info.width}x{info.height}",
-            "-r",
-            f"{info.fps:.6f}",
-            "-i",
-            "pipe:0",
-            "-i",
-            source_video,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0?",
-            "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-            "-shortest",
-            output_path,
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s:v", f"{info.width}x{info.height}", "-r", f"{info.fps:.6f}",
+            "-i", "pipe:0", "-i", source_video,
+            "-map", "0:v:0", "-map", "1:a:0?",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", "-shortest", output_path,
         ]
         try:
             process = subprocess.Popen(
@@ -415,7 +561,6 @@ class FaceSwapper:
 
     @staticmethod
     def _finish_ffmpeg(process: subprocess.Popen) -> tuple[int, str]:
-        """Close the raw-frame pipe, wait for muxing, and return encoder diagnostics."""
         if process.stdin is not None and not process.stdin.closed:
             try:
                 process.stdin.close()
@@ -451,18 +596,11 @@ class FaceSwapper:
             return False, "The source photo could not be read"
         source_rect = self.detect_face(source)
         if source_rect is None:
-            return (
-                False,
-                "No face found in the source photo. Use a clear front-facing photo.",
-            )
+            return False, "No face found in the source photo. Use a clear front-facing photo."
 
         capture = cv2.VideoCapture(video_path)
         if not capture.isOpened():
             return False, "The selected video could not be opened"
-
-        # Android/OpenCV can report 0x0 metadata even when frames decode correctly.
-        # Decode one real frame first and derive dimensions from pixels instead of
-        # rejecting a valid phone video based only on container metadata.
         first_ok, first_frame = capture.read()
         if (
             not first_ok
@@ -494,9 +632,11 @@ class FaceSwapper:
 
         if progress_cb:
             progress_cb(
-                "Face detected. Processing locally and encoding MP4...", 1
+                "Face detected. Expression-aware blending and MP4 encoding...", 1
             )
 
+        self._previous_target_points = None
+        self._previous_target_rect = None
         target_rect: Optional[Rect] = None
         processed = 0
         cancelled = False
@@ -508,7 +648,6 @@ class FaceSwapper:
                 if cancel_cb and cancel_cb():
                     cancelled = True
                     break
-
                 try:
                     swapped, target_rect = self.swap_face(
                         source,
@@ -519,6 +658,8 @@ class FaceSwapper:
                 except Exception:
                     swapped = frame
                     target_rect = None
+                    self._previous_target_points = None
+                    self._previous_target_rect = None
 
                 try:
                     if encoder.stdin is None:
@@ -537,7 +678,8 @@ class FaceSwapper:
                 ):
                     percent = min(99, max(1, int(processed * 100 / total)))
                     progress_cb(
-                        f"Processing frame {processed} of about {total}", percent
+                        f"Expression-aware frame {processed} of about {total}",
+                        percent,
                     )
 
                 ok, frame = capture.read()
@@ -547,14 +689,12 @@ class FaceSwapper:
             capture.release()
 
         code, stderr = self._finish_ffmpeg(encoder)
-
         if cancelled:
             try:
                 os.remove(output_path)
             except OSError:
                 pass
             return False, "Cancelled"
-
         if encoder_error:
             try:
                 os.remove(output_path)
@@ -563,14 +703,12 @@ class FaceSwapper:
             if stderr:
                 encoder_error += f" ({stderr[-500:]})"
             return False, encoder_error
-
         if processed == 0:
             try:
                 os.remove(output_path)
             except OSError:
                 pass
             return False, "No video frames were decoded"
-
         if code != 0:
             try:
                 os.remove(output_path)
@@ -578,16 +716,17 @@ class FaceSwapper:
                 pass
             detail = stderr[-700:] if stderr else f"exit code {code}"
             return False, f"FFmpeg could not finalize the MP4: {detail}"
-
         if not os.path.exists(output_path) or os.path.getsize(output_path) < 2048:
             try:
                 os.remove(output_path)
             except OSError:
                 pass
             return False, "The output video was not created correctly"
-
         if progress_cb:
-            progress_cb("Face swap complete. Audio preserved when available.", 100)
+            progress_cb(
+                "Expression-aware face swap complete. Audio preserved when available.",
+                100,
+            )
         return True, output_path
 
 
@@ -598,7 +737,6 @@ def process_video(
     progress_cb: Optional[ProgressCallback] = None,
     cancel_cb: Optional[CancelCallback] = None,
 ) -> tuple[bool, str]:
-    """Module-level API used by the Kivy UI."""
     return FaceSwapper().process_video(
         source_path,
         video_path,
