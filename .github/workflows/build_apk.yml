@@ -1,4 +1,4 @@
-name: Build working FaceSwap Pro APK
+name: Build and publish FaceSwap Pro APK
 
 on:
   workflow_dispatch:
@@ -12,6 +12,15 @@ on:
   pull_request:
     branches:
       - master
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: write
+
+env:
+  APK_RELEASE_TAG: faceswappro-latest
+  APK_RELEASE_NAME: FaceSwap Pro Latest APK
 
 concurrency:
   group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
@@ -49,7 +58,7 @@ jobs:
       - name: Install Buildozer toolchain
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "buildozer==1.6.0" "cython==0.29.34"
+          python -m pip install 'buildozer==1.6.0'
           buildozer --version
 
       - name: Bundle OpenCV face detector
@@ -60,13 +69,17 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
-      - name: Validate source files
+      - name: Validate repaired source
         run: |
-          python -m py_compile main.py faceswap.py
-          grep -q "def process_video" faceswap.py
-          grep -q "requirements = .*opencv" buildozer.spec
-          grep -q "android.api = 36" buildozer.spec
-          grep -q "android.ndk = 28c" buildozer.spec
+          python -m py_compile main.py faceswap.py faceswap/__init__.py
+          grep -q 'def process_video' faceswap.py
+          grep -q 'libffmpegbin.so' faceswap/__init__.py
+          grep -q 'TemporaryFile' faceswap/__init__.py
+          grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
+          grep -q 'p4a.branch = v2026.05.09' buildozer.spec
+          grep -q 'android.api = 36' buildozer.spec
+          grep -q 'android.ndk = 28c' buildozer.spec
+          grep -q '"libx264"' faceswap.py
 
       - name: Build debug APK
         env:
@@ -75,18 +88,42 @@ jobs:
         run: |
           yes | buildozer -v android debug
 
-      - name: Verify generated package
+      - name: Verify and name generated APK
         run: |
-          test -n "$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
-          ls -lh bin/*.apk
-          sha256sum bin/*.apk | tee APK_SHA256.txt
+          APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -q 'libffmpegbin.so'
+          cp "$APK" FaceSwapPro-v1.3.1-expression-aware-arm64.apk
+          ls -lh FaceSwapPro-v1.3.1-expression-aware-arm64.apk
+          sha256sum FaceSwapPro-v1.3.1-expression-aware-arm64.apk | tee APK_SHA256.txt
 
-      - name: Upload installable APK
+      - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-working-arm64-apk
+          name: FaceSwapPro-v1.3.1-expression-aware-arm64
           path: |
-            bin/*.apk
+            FaceSwapPro-v1.3.1-expression-aware-arm64.apk
             APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish public latest APK release
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$APK_RELEASE_TAG" \
+              FaceSwapPro-v1.3.1-expression-aware-arm64.apk APK_SHA256.txt \
+              --clobber
+            gh release edit "$APK_RELEASE_TAG" \
+              --title "$APK_RELEASE_NAME" \
+              --notes 'Expression-aware Android build with mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
+              --latest
+          else
+            gh release create "$APK_RELEASE_TAG" \
+              FaceSwapPro-v1.3.1-expression-aware-arm64.apk APK_SHA256.txt \
+              --title "$APK_RELEASE_NAME" \
+              --notes 'Expression-aware Android build with mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
+              --latest
+          fi
