@@ -1,0 +1,15 @@
+--- ffpyplayer/setup.py
++++ ffpyplayer.mod/setup.py
+@@ -27,12 +27,6 @@
+ # This sets whether or not Cython gets added to setup_requires.
+ declare_cython = False
+ 
+-if platform in ('ios', 'android'):
+-    # NEVER use or declare cython on these platforms
+-    print('Not using cython on %s' % platform)
+-    can_use_cython = False
+-else:
+-    declare_cython = True
+ 
+ src_path = build_path = dirname(__file__)
+ print(f'Source/build path: {src_path}')

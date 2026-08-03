@@ -48,8 +48,19 @@ jobs:
       - name: Install Buildozer toolchain
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "buildozer==1.6.0" "cython==0.29.34"
+          python -m pip install "buildozer==1.6.0" "cython==0.29.37"
           buildozer --version
+          cython --version
+
+      - name: Pin compatible python-for-android
+        run: |
+          mkdir -p .buildozer/android/platform
+          git clone https://github.com/kivy/python-for-android.git \
+            .buildozer/android/platform/python-for-android
+          cd .buildozer/android/platform/python-for-android
+          git checkout 5d5ca2b57aa49c508950c927eb42d2ffe14c3cf6
+          grep -q "version = '3.11.5'" pythonforandroid/recipes/python3/__init__.py
+          grep -q 'RECOMMENDED_NDK_VERSION = "25b"' pythonforandroid/recommendations.py
 
       - name: Bundle OpenCV face detector
         run: |
@@ -59,20 +70,71 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
+      - name: Fix Android MediaStore integer overload
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("main.py")
+          text = path.read_text(encoding="utf-8")
+          marker = '    ContentValues = autoclass("android.content.ContentValues")\n'
+          integer_line = '    JavaInteger = autoclass("java.lang.Integer")\n'
+          if integer_line not in text:
+              if marker not in text:
+                  raise SystemExit("ContentValues marker was not found")
+              text = text.replace(marker, marker + integer_line, 1)
+          text = text.replace(
+              "values.put(MediaColumns.IS_PENDING, 1)",
+              "values.put(MediaColumns.IS_PENDING, JavaInteger.valueOf(1))",
+          )
+          text = text.replace(
+              "ready.put(MediaColumns.IS_PENDING, 0)",
+              "ready.put(MediaColumns.IS_PENDING, JavaInteger.valueOf(0))",
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Fix Android video dimensions
+        run: python .github/scripts/fix_android_video_dimensions.py
+
       - name: Validate source files
         run: |
           python -m py_compile main.py faceswap.py
           grep -q "def process_video" faceswap.py
+          grep -q "JavaInteger.valueOf(1)" main.py
+          grep -q "JavaInteger.valueOf(0)" main.py
+          grep -q "first_ok, first_frame = capture.read()" faceswap.py
+          grep -q "pending_frame = first_frame" faceswap.py
           grep -q "requirements = .*opencv" buildozer.spec
+          grep -q "ffpyplayer_codecs" buildozer.spec
+          grep -q "version = 1.4.0" buildozer.spec
           grep -q "android.api = 36" buildozer.spec
-          grep -q "android.ndk = 28c" buildozer.spec
+          grep -q "android.ndk = 25b" buildozer.spec
+          grep -q "p4a.source_dir = .buildozer/android/platform/python-for-android" buildozer.spec
 
       - name: Build debug APK
+        id: android_build
         env:
           USE_CCACHE: "1"
           CCACHE_DIR: ${{ github.workspace }}/.ccache
+        shell: bash
         run: |
-          yes | buildozer -v android debug
+          set +e
+          yes | buildozer -v android debug 2>&1 | tee build.log
+          status=${PIPESTATUS[1]}
+          tail -n 1200 build.log > BUILD_LOG_TAIL.txt
+          exit "$status"
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-build-diagnostics
+          path: |
+            BUILD_LOG_TAIL.txt
+            build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Verify generated package
         run: |

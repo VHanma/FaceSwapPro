@@ -1,13 +1,14 @@
 """Offline face-swap engine for FaceSwap Pro.
 
-Uses OpenCV only. A source face is warped onto the largest face found in each
-video frame, then blended with seamlessClone. No server, account, or API key.
+OpenCV performs the face warp and bundled FFmpeg writes the finished MP4. No
+server, account, upload, or API key is required.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Callable, Optional, Sequence, Tuple
 
 import cv2
@@ -24,6 +25,78 @@ class VideoInfo:
     height: int
     fps: float
     frame_count: int
+
+
+class _FFmpegFrameWriter:
+    """MP4 writer backed by FFPyPlayer/FFmpeg.
+
+    OpenCV's Android package often exposes ``VideoWriter`` even when it has no
+    usable MP4 encoder. FFPyPlayer bundles FFmpeg and produces the MP4 itself,
+    so this path does not depend on whichever codecs the phone vendor exposed
+    to OpenCV.
+    """
+
+    backend = "FFmpeg"
+
+    def __init__(self, path: str, info: VideoInfo) -> None:
+        from ffpyplayer.pic import Image
+        from ffpyplayer.writer import MediaWriter
+
+        rate = Fraction(info.fps).limit_denominator(1001)
+        stream_options = {
+            "pix_fmt_in": "rgb24",
+            "width_in": info.width,
+            "height_in": info.height,
+            "pix_fmt_out": "yuv420p",
+            "width_out": info.width,
+            "height_out": info.height,
+            "codec": "mpeg4",
+            "frame_rate": (rate.numerator, rate.denominator),
+        }
+        self._image_class = Image
+        self._writer = MediaWriter(path, [stream_options], fmt="mp4", overwrite=True)
+        self._width = info.width
+        self._height = info.height
+        self._fps = info.fps
+        self._frame_index = 0
+
+    def write(self, frame: np.ndarray) -> None:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if not rgb.flags.c_contiguous:
+            rgb = np.ascontiguousarray(rgb)
+        image = self._image_class(
+            plane_buffers=[bytearray(rgb.tobytes())],
+            pix_fmt="rgb24",
+            size=(self._width, self._height),
+        )
+        self._writer.write_frame(
+            img=image,
+            pts=self._frame_index / self._fps,
+            stream=0,
+        )
+        self._frame_index += 1
+
+    def release(self) -> None:
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            writer.close()
+
+
+class _OpenCVFrameWriter:
+    """Last-resort writer for desktop builds or unusual Android packages."""
+
+    backend = "OpenCV"
+
+    def __init__(self, writer: cv2.VideoWriter) -> None:
+        self._writer = writer
+
+    def write(self, frame: np.ndarray) -> None:
+        self._writer.write(frame)
+
+    def release(self) -> None:
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            writer.release()
 
 
 def _cascade_path() -> str:
@@ -285,7 +358,13 @@ class FaceSwapper:
         return blended, target_rect
 
     @staticmethod
-    def _open_writer(path: str, info: VideoInfo) -> cv2.VideoWriter:
+    def _open_writer(path: str, info: VideoInfo):
+        ffmpeg_error: Optional[Exception] = None
+        try:
+            return _FFmpegFrameWriter(path, info)
+        except Exception as exc:
+            ffmpeg_error = exc
+
         codec_candidates = ("mp4v", "avc1", "H264")
         for codec in codec_candidates:
             writer = cv2.VideoWriter(
@@ -295,9 +374,11 @@ class FaceSwapper:
                 (info.width, info.height),
             )
             if writer.isOpened():
-                return writer
+                return _OpenCVFrameWriter(writer)
             writer.release()
-        raise RuntimeError("This Android OpenCV build could not create an MP4 video")
+
+        detail = f": {ffmpeg_error}" if ffmpeg_error else ""
+        raise RuntimeError(f"The phone could not start the bundled MP4 encoder{detail}")
 
     def process_video(
         self,
@@ -329,18 +410,31 @@ class FaceSwapper:
             fps = 30.0
         total = max(total, 1)
 
+        output_width = width - (width % 2)
+        output_height = height - (height % 2)
+        if output_width < 2 or output_height < 2:
+            capture.release()
+            return False, "The selected video is too small to encode"
+
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         try:
-            writer = self._open_writer(output_path, VideoInfo(width, height, fps, total))
+            writer = self._open_writer(
+                output_path,
+                VideoInfo(output_width, output_height, fps, total),
+            )
         except Exception as exc:
             capture.release()
             return False, str(exc)
 
         if progress_cb:
-            progress_cb("Face detected. Processing video on this phone...", 1)
+            progress_cb(
+                f"Face detected. Processing with the {writer.backend} video encoder...",
+                1,
+            )
 
         target_rect: Optional[Rect] = None
         processed = 0
+        close_error: Optional[Exception] = None
         try:
             while True:
                 if cancel_cb and cancel_cb():
@@ -358,15 +452,25 @@ class FaceSwapper:
                 except Exception:
                     swapped = frame
                     target_rect = None
-                writer.write(swapped)
+                if swapped.shape[1] != output_width or swapped.shape[0] != output_height:
+                    swapped = swapped[:output_height, :output_width]
+                try:
+                    writer.write(swapped)
+                except Exception as exc:
+                    return False, f"The video encoder stopped at frame {processed + 1}: {exc}"
                 processed += 1
                 if progress_cb and (processed == 1 or processed % max(1, total // 100) == 0):
                     percent = min(99, max(1, int(processed * 100 / total)))
                     progress_cb(f"Processing frame {processed} of about {total}", percent)
         finally:
             capture.release()
-            writer.release()
+            try:
+                writer.release()
+            except Exception as exc:
+                close_error = exc
 
+        if close_error is not None:
+            return False, f"The video encoder could not finish the MP4: {close_error}"
         if processed == 0:
             try:
                 os.remove(output_path)
@@ -374,7 +478,7 @@ class FaceSwapper:
                 pass
             return False, "No video frames were decoded"
         if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
-            return False, "The output video was not created correctly"
+            return False, "The bundled video encoder did not finish the MP4 file"
         if progress_cb:
             progress_cb("Face swap complete", 100)
         return True, output_path
