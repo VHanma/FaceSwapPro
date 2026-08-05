@@ -1,4 +1,4 @@
-name: Build and publish FaceSwap Pro APK
+name: Build FaceSwap Pro APEX APK
 
 on:
   workflow_dispatch:
@@ -12,23 +12,17 @@ on:
   pull_request:
     branches:
       - master
-  schedule:
-    - cron: '*/15 * * * *'
 
 permissions:
   contents: write
 
-env:
-  APK_RELEASE_TAG: faceswappro-latest
-  APK_RELEASE_NAME: FaceSwap Pro Latest APK
-
 concurrency:
-  group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
+  group: faceswappro-apex-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Compile ARM64 Android APK
+    name: Compile APEX ARM64 Android APK
     runs-on: ubuntu-22.04
     timeout-minutes: 300
 
@@ -61,7 +55,7 @@ jobs:
           python -m pip install 'buildozer==1.6.0'
           buildozer --version
 
-      - name: Bundle OpenCV face detector
+      - name: Bundle legacy detector fallback
         run: |
           mkdir -p assets
           curl --fail --location --retry 3 \
@@ -69,67 +63,69 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
-      - name: Prepare collision-free packaged engine
+      - name: Prepare proven FFmpeg engine base
         run: |
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
 
-      - name: Validate repaired source
+      - name: Validate APEX neural source
         run: |
-          python -m py_compile main.py faceswap_engine.py faceswap/__init__.py
-          grep -q 'def process_video' faceswap_engine.py
-          grep -q 'from faceswap_engine import' faceswap/__init__.py
+          python -m py_compile \
+            main.py faceswap_engine.py faceswap/__init__.py \
+            apex_models.py apex_ort.py apex_engine.py
+          grep -q 'class ApexFaceSwapper' apex_engine.py
+          grep -q 'ghost_1_256.onnx' apex_models.py
+          grep -q 'bisenet_resnet_18.onnx' apex_models.py
+          grep -q 'gfpgan_1.4.onnx' apex_models.py
+          grep -q 'onnxruntime-android:1.27.0' buildozer.spec
+          grep -q 'android.add_src = java_src' buildozer.spec
+          grep -q 'android.permissions = INTERNET' buildozer.spec
+          grep -q 'class ApexOrtBridge' java_src/org/vaan/faceswap/apex/ApexOrtBridge.java
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q 'TemporaryFile' faceswap/__init__.py
-          grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
           grep -q 'p4a.branch = v2026.05.09' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
-          grep -q '"libx264"' faceswap_engine.py
 
-      - name: Build debug APK
+      - name: Build APEX debug APK
         env:
           USE_CCACHE: '1'
           CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           yes | buildozer -v android debug
 
-      - name: Verify and name generated APK
+      - name: Verify neural runtime and package
         run: |
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'libffmpegbin.so'
-          cp "$APK" FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          ls -lh FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          sha256sum FaceSwapPro-v1.3.2-expression-aware-arm64.apk | tee APK_SHA256.txt
+          unzip -l "$APK" | grep -q 'ApexOrtBridge'
+          unzip -l "$APK" | grep -Eq 'libonnxruntime|onnxruntime'
+          cp "$APK" FaceSwapPro-APEX-v2.0.0-arm64.apk
+          ls -lh FaceSwapPro-APEX-v2.0.0-arm64.apk
+          sha256sum FaceSwapPro-APEX-v2.0.0-arm64.apk | tee APK_SHA256.txt
 
-      - name: Upload installable APK artifact
+      - name: Upload APEX installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v1.3.2-expression-aware-arm64
+          name: FaceSwapPro-APEX-v2.0.0-arm64
           path: |
-            FaceSwapPro-v1.3.2-expression-aware-arm64.apk
+            FaceSwapPro-APEX-v2.0.0-arm64.apk
             APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish public latest APK release
+      - name: Publish APEX latest release
         if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
-              --clobber
-            gh release edit "$APK_RELEASE_TAG" \
-              --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
-              --latest
+          TAG='faceswappro-apex-latest'
+          NOTES='APEX v2 neural architecture: GHOST 256 identity transfer, YuNet five-point alignment, BiSeNet semantic face masks, temporal anti-flicker, target relighting, optional GFPGAN 512 restoration, NNAPI/ONNX Runtime Android inference, and local media processing.'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" FaceSwapPro-APEX-v2.0.0-arm64.apk APK_SHA256.txt --clobber
+            gh release edit "$TAG" --title 'FaceSwap Pro APEX Latest' --notes "$NOTES" --latest
           else
-            gh release create "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
-              --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
-              --latest
+            gh release create "$TAG" FaceSwapPro-APEX-v2.0.0-arm64.apk APK_SHA256.txt \
+              --title 'FaceSwap Pro APEX Latest' --notes "$NOTES" --latest
           fi
