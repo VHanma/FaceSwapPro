@@ -1,41 +1,26 @@
-"""Android runtime fixes for the expression-aware FaceSwap Pro engine.
+"""Android-safe FaceSwap Pro runtime wrapper.
 
-Python imports this package before the sibling ``faceswap.py`` module. The
-package loads that engine privately, then supplies Android-safe FFmpeg lookup
-and non-blocking error capture. Everything remains offline.
+The build copies the expression engine to ``faceswap_engine.py`` before
+Buildozer packages the app. Keeping the engine under a different module name
+avoids the Python package/module collision that caused Android to import this
+package and then fail looking for a missing sibling ``faceswap.py`` file.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from typing import Optional
 
-
-_BASE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "faceswap.py",
+from faceswap_engine import (
+    CancelCallback,
+    FaceSwapper as BaseFaceSwapper,
+    ProgressCallback,
+    Rect,
+    VideoInfo,
 )
-_SPEC = importlib.util.spec_from_file_location(
-    "_faceswappro_expression_engine",
-    _BASE_PATH,
-)
-if _SPEC is None or _SPEC.loader is None:
-    raise ImportError("Could not load the FaceSwap Pro expression engine")
-
-_BASE = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _BASE
-_SPEC.loader.exec_module(_BASE)
-
-ProgressCallback = _BASE.ProgressCallback
-CancelCallback = _BASE.CancelCallback
-Rect = _BASE.Rect
-VideoInfo = _BASE.VideoInfo
-BaseFaceSwapper = _BASE.FaceSwapper
 
 
 def _android_native_library_dir() -> Optional[str]:
@@ -143,8 +128,6 @@ class FaceSwapper(BaseFaceSwapper):
             output_path,
         ]
 
-        # A TemporaryFile drains FFmpeg continuously at OS level. A PIPE can
-        # fill during long/corrupt videos and freeze both encoding and cancel.
         stderr_file = tempfile.TemporaryFile()
         env = os.environ.copy()
         native_dir = _android_native_library_dir()
