@@ -561,27 +561,55 @@ class FaceSwapper:
 
     @staticmethod
     def _finish_ffmpeg(process: subprocess.Popen) -> tuple[int, str]:
+        """
+        Finalize the ffmpeg process and return (exit_code, stderr_text).
+
+        Use communicate() with a timeout to avoid deadlocks where ffmpeg blocks
+        on its stderr pipe or finalization takes a long time on slow devices.
+        """
+        # Close stdin if still open so ffmpeg can finish consuming frames.
         if process.stdin is not None and not process.stdin.closed:
             try:
                 process.stdin.close()
             except OSError:
                 pass
+
         timed_out = False
+        stderr_text = ""
         try:
-            code = process.wait(timeout=120)
+            # Allow more time on slower devices; 300 seconds is generous but safe.
+            _, stderr = process.communicate(timeout=300)
+            if stderr:
+                try:
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    stderr_text = str(stderr)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.kill()
-            code = process.wait()
-        stderr = b""
-        if process.stderr is not None:
             try:
-                stderr = process.stderr.read()
-            except OSError:
-                stderr = b""
+                process.kill()
+            except Exception:
+                pass
+            # Read any remaining output after killing
+            try:
+                _, stderr = process.communicate(timeout=5)
+                if stderr:
+                    try:
+                        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        stderr_text = str(stderr)
+            except Exception:
+                stderr_text = ""  # best-effort
+
+        # Ensure we have a numeric exit code
+        try:
+            code = process.returncode if process.returncode is not None else 1
+        except Exception:
+            code = 1
+
         if timed_out:
             return code or 1, "FFmpeg timed out while finalizing the MP4"
-        return code, stderr.decode("utf-8", errors="replace").strip()
+        return code, stderr_text
 
     def process_video(
         self,
