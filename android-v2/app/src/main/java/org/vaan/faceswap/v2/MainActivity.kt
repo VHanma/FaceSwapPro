@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.vaan.faceswap.v2.engine.DefaultIdentityVault
+import org.vaan.faceswap.v2.engine.NeuralModelPackManager
+import org.vaan.faceswap.v2.engine.NeuralSwapPreviewRunner
 import org.vaan.faceswap.v2.engine.SemanticMaskAnalyzer
 import org.vaan.faceswap.v2.engine.VideoTrackingAnalyzer
 import org.vaan.faceswap.v2.model.QualityMode
@@ -35,6 +37,8 @@ class MainActivity : ComponentActivity() {
 private fun FaceSwapV2Screen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val pack = remember { NeuralModelPackManager(context.applicationContext) }
+
     var sources by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var video by remember { mutableStateOf<Uri?>(null) }
     var mode by remember { mutableStateOf(QualityMode.BALANCED) }
@@ -42,6 +46,13 @@ private fun FaceSwapV2Screen() {
     var trackingBusy by remember { mutableStateOf(false) }
     var maskBusy by remember { mutableStateOf(false) }
     var vaultBusy by remember { mutableStateOf(false) }
+    var packBusy by remember { mutableStateOf(false) }
+    var previewBusy by remember { mutableStateOf(false) }
+    var packInstalled by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        packInstalled = runCatching { pack.verifyInstalled() }.getOrDefault(false)
+    }
 
     val sourcePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -112,7 +123,7 @@ private fun FaceSwapV2Screen() {
                 onClick = {
                     val selected = video ?: return@Button
                     trackingBusy = true
-                    status = "Running real MediaPipe VIDEO-mode tracking probe…"
+                    status = "Running MediaPipe VIDEO-mode tracking probe…"
                     scope.launch {
                         status = runCatching {
                             withContext(Dispatchers.Default) {
@@ -139,9 +150,64 @@ private fun FaceSwapV2Screen() {
                 when (mode) {
                     QualityMode.FAST -> "256px internal face render, minimal refinement."
                     QualityMode.BALANCED -> "512px render, semantic/temporal refinement path enabled."
-                    QualityMode.MOVIE -> "Maximum temporal, relighting, camera-match and bad-frame rerender path."
+                    QualityMode.MOVIE -> "512px neural identity synthesis, semantic compositing and maximum refinement path."
                 }
             )
+
+            HorizontalDivider()
+            Text("Movie Neural Pack", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                if (packInstalled) {
+                    "Installed + SHA-256 verified. Neural synthesis runs offline after installation."
+                } else {
+                    "Optional ~416 MiB research/non-commercial model pack: ArcFace R50 + CrossFace + SimSwap 512."
+                }
+            )
+            Button(
+                enabled = !packBusy,
+                onClick = {
+                    if (packInstalled) {
+                        status = "Movie Neural Pack is installed and verified."
+                    } else {
+                        packBusy = true
+                        status = "Installing Movie Neural Pack…"
+                        scope.launch {
+                            status = runCatching {
+                                pack.install { progress ->
+                                    val percent = if (progress.packTotal <= 0L) 0 else
+                                        (progress.packBytes * 100L / progress.packTotal).toInt().coerceIn(0, 100)
+                                    scope.launch {
+                                        status = "Movie Neural Pack $percent% • ${progress.model}"
+                                    }
+                                }
+                                packInstalled = pack.verifyInstalled()
+                                if (packInstalled) {
+                                    "MOVIE PACK READY • ${NeuralModelPackManager.formatBytes(pack.requiredBytes)} verified"
+                                } else {
+                                    "Movie pack downloaded but verification did not pass"
+                                }
+                            }.getOrElse { "Movie pack error: ${it.message}" }
+                            packBusy = false
+                        }
+                    }
+                }
+            ) { Text(if (packBusy) "Installing neural models…" else if (packInstalled) "Verify Movie Neural Pack" else "Install Movie Neural Pack") }
+
+            Button(
+                enabled = packInstalled && sources.isNotEmpty() && video != null && !previewBusy,
+                onClick = {
+                    val selectedVideo = video ?: return@Button
+                    previewBusy = true
+                    status = "Rendering real SimSwap-512 neural preview…"
+                    scope.launch {
+                        status = runCatching {
+                            val result = NeuralSwapPreviewRunner(context).run(sources, selectedVideo, pack)
+                            "NEURAL PREVIEW SAVED • source yaw ${result.sourceYaw.toInt()}° → target yaw ${result.targetYaw.toInt()}° / pitch ${result.targetPitch.toInt()}° • Pictures/FaceSwapPro"
+                        }.getOrElse { "Neural preview error: ${it.message}" }
+                        previewBusy = false
+                    }
+                }
+            ) { Text(if (previewBusy) "Rendering neural preview…" else "Render Movie neural preview") }
 
             HorizontalDivider()
             Button(onClick = {
@@ -155,7 +221,7 @@ private fun FaceSwapV2Screen() {
             Button(
                 enabled = sources.isNotEmpty() && video != null,
                 onClick = {
-                    status = "Inputs ready. Pipeline: 478-point tracking → 512-D Identity Vault → neural swap → 19-region semantic compositor → temporal/relight/restoration → quality gate."
+                    status = "Inputs ready. Pipeline: 478-point tracking → pose-aware identity selection → SimSwap 512 → 19-region compositor → temporal/relight/restoration → quality gate."
                 }
             ) { Text("Prepare v2 pipeline") }
 
