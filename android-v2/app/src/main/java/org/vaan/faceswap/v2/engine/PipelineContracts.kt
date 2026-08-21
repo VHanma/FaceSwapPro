@@ -11,6 +11,7 @@ data class IdentityReference(
     val sharpness: Float = 0f,
     val occlusionScore: Float = 0f,
     val identityScore: Float = 0f,
+    val embedding: FloatArray = floatArrayOf(),
 )
 
 data class FrameQuality(
@@ -27,6 +28,7 @@ data class FrameQuality(
 interface IdentityVault {
     suspend fun build(references: List<Uri>): List<IdentityReference>
     fun bestReference(yaw: Float, pitch: Float, expressionHint: String? = null): IdentityReference?
+    fun fusedEmbedding(): FloatArray
 }
 
 interface SwapEngine {
