@@ -47,24 +47,33 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Fetch MediaPipe face landmarker model
+      - name: Fetch neural tracking and parsing models
         run: |
           mkdir -p app/src/main/assets/models
+
           curl --fail --location --retry 4 \
             'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task' \
             -o app/src/main/assets/models/face_landmarker.task
+
+          curl --fail --location --retry 4 \
+            'https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx' \
+            -o app/src/main/assets/models/face_parser_resnet18.onnx
+
           test -s app/src/main/assets/models/face_landmarker.task
+          test -s app/src/main/assets/models/face_parser_resnet18.onnx
           sha256sum app/src/main/assets/models/face_landmarker.task | tee app/src/main/assets/models/face_landmarker.sha256
+          sha256sum app/src/main/assets/models/face_parser_resnet18.onnx | tee app/src/main/assets/models/face_parser_resnet18.sha256
 
       - name: Compile native v2 APK
         run: gradle --stacktrace :app:assembleDebug
 
-      - name: Verify native library and model are packaged
+      - name: Verify native library and models are packaged
         run: |
           APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libfaceswap_v2.so'
           unzip -l "$APK" | grep -q 'assets/models/face_landmarker.task'
+          unzip -l "$APK" | grep -q 'assets/models/face_parser_resnet18.onnx'
           cp "$APK" FaceSwapPro-v2-alpha1-arm64.apk
           sha256sum FaceSwapPro-v2-alpha1-arm64.apk | tee FaceSwapPro-v2-alpha1-SHA256.txt
 
