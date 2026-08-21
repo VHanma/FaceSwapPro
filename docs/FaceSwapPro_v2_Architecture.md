@@ -3,26 +3,33 @@
 ## Goal
 Replace the legacy Haar + hand-guessed landmark + Delaunay triangle warp engine with a native Android pipeline designed for stable video face replacement.
 
-## Current alpha1 foundation
+## Implemented on `faceswappro-v2-native`
 - Kotlin / Jetpack Compose application shell.
 - Android API 37 compile, API 36 target, ARM64-first.
-- MediaPipe Tasks Vision 0.10.35 Face Landmarker in VIDEO mode.
-- 478-point landmark output path plus blendshape and facial transform outputs enabled.
+- MediaPipe Tasks Vision Face Landmarker in VIDEO mode.
+- 478-point landmark path plus blendshape and facial transform outputs enabled.
+- Real sampled-video tracking quality probe with detection-rate and landmark-count gates.
 - C++20/JNI engine boundary.
+- ONNX Runtime Android backend and on-device runtime/provider probe.
 - Fast / Balanced / Movie quality contracts.
 - Identity Vault contracts for multi-image, pose-aware source selection.
-- Stage contracts for neural swap, semantic mask, occlusion, temporal stabilization, relighting, restoration and quality-gated rerendering.
+- Real BiSeNet ResNet18 ONNX semantic parser with 19 CelebAMask-HQ regions.
+- Semantic mask probe for skin, hair, eyes, mouth/lips, glasses and protected foreground.
+- Separate semantic masks for identity-bearing pixels, mouth interior and foreground protection.
+- Stage contracts for neural swap, occlusion, temporal stabilization, relighting, restoration and quality-gated rerendering.
+- CI downloads and hashes the official tracking model and MIT face-parsing model, builds ARM64 APK, then verifies the native library/models are packaged.
 
 ## Runtime plan
-1. **Tracking:** MediaPipe Face Landmarker, VIDEO mode. Tracking confidence and persistent timestamps are used to reduce detector churn between frames.
+1. **Tracking:** MediaPipe Face Landmarker, VIDEO mode. Tracking confidence and persistent timestamps reduce detector churn between frames.
 2. **Identity:** multiple source images are scored for yaw/pitch/roll, sharpness, occlusion and identity confidence. Per target frame, the vault selects or fuses the best pose-compatible identity evidence.
-3. **Neural swap:** swappable model adapter. Primary deployment target is ncnn/Vulkan; ONNX Runtime remains the compatibility backend.
-4. **Semantic compositor:** face parsing produces region masks rather than one blurred oval. Mouth interior, eye highlights, facial hair, hair, glasses and foreground occluders remain independently controllable.
-5. **Temporal system:** scene-cut reset, track continuity, landmark filtering, previous-mask propagation and neighboring-frame quality signals.
-6. **Relighting:** low-frequency spatial illumination is transferred without overwriting identity detail.
-7. **Restoration:** restoration occurs after identity synthesis and compositing, with strength constrained by identity similarity.
-8. **Quality gate:** Movie mode scores identity, geometry, mask, temporal consistency and lighting. Frames below the threshold are rerender candidates.
-9. **Mastering:** preserve source timing/audio, then export an HQ H.264/H.265 master depending on device/backend support.
+3. **Neural swap:** swappable model adapter. Primary deployment target remains ncnn/Vulkan; ONNX Runtime is already wired as the broad compatibility backend.
+4. **Semantic compositor:** the implemented 19-region parser replaces the single blurred oval. Hair, hats, eyeglasses and earrings can be protected independently; mouth interior is isolated from the identity composite.
+5. **Occlusion:** semantic masks provide known facial foreground classes. A dedicated occluder model/temporal foreground pass will handle arbitrary hands, microphones and other objects crossing the face.
+6. **Temporal system:** scene-cut reset, track continuity, landmark filtering, previous-mask propagation and neighboring-frame quality signals.
+7. **Relighting:** low-frequency spatial illumination is transferred without overwriting identity detail.
+8. **Restoration:** restoration occurs after identity synthesis and compositing, with strength constrained by identity similarity.
+9. **Quality gate:** Movie mode scores identity, geometry, mask, temporal consistency and lighting. Frames below the threshold become rerender candidates.
+10. **Mastering:** preserve source timing/audio, then export an HQ H.264/H.265 master depending on device/backend support.
 
 ## Quality modes
 ### Fast
@@ -35,13 +42,14 @@ Replace the legacy Haar + hand-guessed landmark + Delaunay triangle warp engine 
 512px or higher model-dependent crop, multi-frame temporal window, occlusion refinement, camera-character matching, stronger restoration and quality-triggered rerendering.
 
 ## Model policy
-Model binaries are not silently committed. Every model must have a documented source, hash, license and intended commercial/non-commercial usage before release packaging. This also lets us replace the swapper without rewriting the app.
+See `docs/Model_Licensing.md`. Models are registered with source, hash and usage terms before release packaging. This keeps the architecture replaceable instead of trapping the APK behind one swapper.
 
-## Next implementation gates
-1. Compile/install alpha1 and validate the JNI self-test.
-2. Decode video frames into MediaPipe-compatible images and export a tracking-preview video.
-3. Build Identity Vault embeddings and pose scoring.
-4. Integrate the first licensed neural swap model behind the `SwapEngine` contract.
-5. Add semantic parsing and occlusion masks.
-6. Add temporal/relight/restoration passes.
+## Remaining implementation gates
+1. Get a green CI APK build and run the native/runtime/tracking/masking probes on-device.
+2. Implement Identity Vault embeddings and automatic pose scoring.
+3. Integrate the first face-swap model behind the `SwapEngine` contract.
+4. Add arbitrary-object occlusion refinement beyond the current semantic face classes.
+5. Add temporal mask/geometry propagation and scene-cut handling.
+6. Add spatial relighting and restoration passes.
 7. Add per-frame quality scoring and Movie-mode rerender controller.
+8. Replace probe-only processing with full video decode → process → audio-preserving master export.
