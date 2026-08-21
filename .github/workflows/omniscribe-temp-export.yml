@@ -1,0 +1,53 @@
+name: Temporary OmniScribe Artifact Export
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  EXPORT_ISSUE_TITLE: '[CI] Export OmniScribe APK artifact'
+  RELEASE_TAG: omniscribe-v1.1-ci
+
+jobs:
+  export:
+    if: github.event.issue.title == '[CI] Export OmniScribe APK artifact'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download built APK from temporary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" --pattern 'OmniScribe-v1.1-arm64.apk*'
+          sha256sum -c OmniScribe-v1.1-arm64.apk.sha256
+          unzip -t OmniScribe-v1.1-arm64.apk
+
+      - name: Upload connector-readable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniScribe-v1.1-arm64
+          path: |
+            OmniScribe-v1.1-arm64.apk
+            OmniScribe-v1.1-arm64.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Report export success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_EXPORT_SUCCESS run_id=${{ github.run_id }}"
+
+      - name: Report export failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_EXPORT_FAILED run_id=${{ github.run_id }}"
