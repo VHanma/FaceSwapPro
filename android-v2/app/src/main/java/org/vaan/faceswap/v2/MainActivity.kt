@@ -14,7 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.vaan.faceswap.v2.model.QualityMode
-import org.vaan.faceswap.v2.nativebridge.NativeFaceEngine
+import org.vaan.faceswap.v2.nativebridge.RuntimeSelector
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,17 +82,17 @@ private fun FaceSwapV2Screen() {
 
             HorizontalDivider()
             Button(onClick = {
-                status = runCatching { NativeFaceEngine.selfTest() }
+                status = runCatching { RuntimeSelector.report().toString() }
                     .fold(
-                        onSuccess = { "Native core: $it" },
-                        onFailure = { "Native core error: ${it.message}" }
+                        onSuccess = { it },
+                        onFailure = { "Runtime probe error: ${it.message}" }
                     )
-            }) { Text("Run native engine self-test") }
+            }) { Text("Probe AI acceleration") }
 
             Button(
                 enabled = sources.isNotEmpty() && video != null,
                 onClick = {
-                    status = "Inputs ready. Next pipeline stage: MediaPipe 478-point video tracking → identity vault → neural swap → semantic compositor."
+                    status = "Inputs ready. Pipeline: MediaPipe 478-point video tracking → identity vault → neural swap → semantic compositor → temporal/relight/restoration → quality gate."
                 }
             ) { Text("Prepare v2 pipeline") }
 
