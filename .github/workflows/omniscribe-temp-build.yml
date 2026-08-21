@@ -33,9 +33,11 @@ jobs:
           mkdir -p omniscribe
           unzip -q /tmp/omniscribe.zip -d omniscribe || true
           cp ci/WhisperEngine.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
+          cp ci/TranscriptExporter.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/TranscriptExporter.java
           test -f omniscribe/app/build.gradle
           test -f omniscribe/scripts/fetch-whisper.sh
           test -s omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
+          test -s omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/TranscriptExporter.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
