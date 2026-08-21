@@ -1,0 +1,78 @@
+name: Build FaceSwap Pro v2 native APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'android-v2/**'
+      - '.github/workflows/build_v2_native.yml'
+  push:
+    branches:
+      - faceswappro-v2-native
+    paths:
+      - 'android-v2/**'
+      - '.github/workflows/build_v2_native.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: android-v2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android toolchain
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager \
+            'platforms;android-37' \
+            'build-tools;36.0.0' \
+            'ndk;28.2.13676358' \
+            'cmake;3.22.1'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Fetch MediaPipe face landmarker model
+        run: |
+          mkdir -p app/src/main/assets/models
+          curl --fail --location --retry 4 \
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task' \
+            -o app/src/main/assets/models/face_landmarker.task
+          test -s app/src/main/assets/models/face_landmarker.task
+          sha256sum app/src/main/assets/models/face_landmarker.task | tee app/src/main/assets/models/face_landmarker.sha256
+
+      - name: Compile native v2 APK
+        run: gradle --stacktrace :app:assembleDebug
+
+      - name: Verify native library and model are packaged
+        run: |
+          APK="$(find app/build/outputs/apk/debug -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libfaceswap_v2.so'
+          unzip -l "$APK" | grep -q 'assets/models/face_landmarker.task'
+          cp "$APK" FaceSwapPro-v2-alpha1-arm64.apk
+          sha256sum FaceSwapPro-v2-alpha1-arm64.apk | tee FaceSwapPro-v2-alpha1-SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-v2-alpha1-arm64
+          path: |
+            android-v2/FaceSwapPro-v2-alpha1-arm64.apk
+            android-v2/FaceSwapPro-v2-alpha1-SHA256.txt
+          retention-days: 30
+          if-no-files-found: error
