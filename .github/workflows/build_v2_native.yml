@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -36,9 +36,8 @@ jobs:
 
       - name: Install Android toolchain
         run: |
-          yes | sdkmanager --licenses >/dev/null
           sdkmanager \
-            'platforms;android-37' \
+            'platforms;android-36' \
             'build-tools;36.0.0' \
             'ndk;28.2.13676358' \
             'cmake;3.22.1'
