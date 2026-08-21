@@ -75,6 +75,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("com.google.mediapipe:tasks-vision:0.10.35")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
     implementation("androidx.media3:media3-common:1.11.0")
     implementation("androidx.media3:media3-transformer:1.11.0")
 }
