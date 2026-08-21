@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FaceSwapV2Screen() {
     var sources by remember { mutableStateOf<List<Uri>>(emptyList()) }
