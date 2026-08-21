@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - build/omniscribe-v1.1
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
