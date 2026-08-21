@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.vaan.faceswap.v2.engine.DefaultIdentityVault
 import org.vaan.faceswap.v2.engine.SemanticMaskAnalyzer
 import org.vaan.faceswap.v2.engine.VideoTrackingAnalyzer
 import org.vaan.faceswap.v2.model.QualityMode
@@ -40,6 +41,7 @@ private fun FaceSwapV2Screen() {
     var status by remember { mutableStateOf("v2 native engine ready for setup") }
     var trackingBusy by remember { mutableStateOf(false) }
     var maskBusy by remember { mutableStateOf(false) }
+    var vaultBusy by remember { mutableStateOf(false) }
 
     val sourcePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -60,10 +62,28 @@ private fun FaceSwapV2Screen() {
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text("Identity Vault", style = MaterialTheme.typography.headlineSmall)
-            Text("Add up to 8 source photos. Front, 3/4 and profile angles are designed to be scored and selected per target frame.")
+            Text("Add up to 8 source photos. Front, 3/4 and profile angles are analyzed, identity-encoded and selected per target frame.")
             Button(onClick = { sourcePicker.launch(arrayOf("image/*")) }) {
                 Text(if (sources.isEmpty()) "Choose identity photos" else "Identity photos: ${sources.size}")
             }
+            Button(
+                enabled = sources.isNotEmpty() && !vaultBusy,
+                onClick = {
+                    vaultBusy = true
+                    status = "Building pose-aware 512-D Identity Vault…"
+                    scope.launch {
+                        status = runCatching {
+                            val refs = DefaultIdentityVault(context).build(sources)
+                            val poses = refs.joinToString(" | ") {
+                                "yaw ${it.yaw.toInt()}° / pitch ${it.pitch.toInt()}° / q ${(it.sharpness * 100).toInt()}%"
+                            }
+                            "IDENTITY VAULT PASS • ${refs.size} usable source(s) • $poses"
+                        }.getOrElse { "Identity Vault error: ${it.message}" }
+                        vaultBusy = false
+                    }
+                }
+            ) { Text(if (vaultBusy) "Building Identity Vault…" else "Build Identity Vault") }
+
             Button(
                 enabled = sources.isNotEmpty() && !maskBusy,
                 onClick = {
@@ -135,7 +155,7 @@ private fun FaceSwapV2Screen() {
             Button(
                 enabled = sources.isNotEmpty() && video != null,
                 onClick = {
-                    status = "Inputs ready. Pipeline: 478-point tracking → Identity Vault → neural swap → 19-region semantic compositor → temporal/relight/restoration → quality gate."
+                    status = "Inputs ready. Pipeline: 478-point tracking → 512-D Identity Vault → neural swap → 19-region semantic compositor → temporal/relight/restoration → quality gate."
                 }
             ) { Text("Prepare v2 pipeline") }
 
