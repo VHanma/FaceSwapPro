@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.vaan.faceswap.v2.engine.SemanticMaskAnalyzer
 import org.vaan.faceswap.v2.engine.VideoTrackingAnalyzer
 import org.vaan.faceswap.v2.model.QualityMode
 import org.vaan.faceswap.v2.nativebridge.RuntimeSelector
@@ -38,6 +39,7 @@ private fun FaceSwapV2Screen() {
     var mode by remember { mutableStateOf(QualityMode.BALANCED) }
     var status by remember { mutableStateOf("v2 native engine ready for setup") }
     var trackingBusy by remember { mutableStateOf(false) }
+    var maskBusy by remember { mutableStateOf(false) }
 
     val sourcePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -62,6 +64,22 @@ private fun FaceSwapV2Screen() {
             Button(onClick = { sourcePicker.launch(arrayOf("image/*")) }) {
                 Text(if (sources.isEmpty()) "Choose identity photos" else "Identity photos: ${sources.size}")
             }
+            Button(
+                enabled = sources.isNotEmpty() && !maskBusy,
+                onClick = {
+                    val selected = sources.firstOrNull() ?: return@Button
+                    maskBusy = true
+                    status = "Running 19-region neural face parsing…"
+                    scope.launch {
+                        status = runCatching {
+                            withContext(Dispatchers.Default) {
+                                SemanticMaskAnalyzer(context).analyze(selected).toString()
+                            }
+                        }.getOrElse { "Semantic mask probe error: ${it.message}" }
+                        maskBusy = false
+                    }
+                }
+            ) { Text(if (maskBusy) "Analyzing mask…" else "Test semantic masking") }
 
             HorizontalDivider()
             Text("Target video", style = MaterialTheme.typography.headlineSmall)
@@ -117,7 +135,7 @@ private fun FaceSwapV2Screen() {
             Button(
                 enabled = sources.isNotEmpty() && video != null,
                 onClick = {
-                    status = "Inputs ready. Pipeline: MediaPipe 478-point video tracking → identity vault → neural swap → semantic compositor → temporal/relight/restoration → quality gate."
+                    status = "Inputs ready. Pipeline: 478-point tracking → Identity Vault → neural swap → 19-region semantic compositor → temporal/relight/restoration → quality gate."
                 }
             ) { Text("Prepare v2 pipeline") }
 
