@@ -47,7 +47,7 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Fetch neural tracking and parsing models
+      - name: Fetch neural tracking, parsing and identity models
         run: |
           mkdir -p app/src/main/assets/models
 
@@ -59,10 +59,16 @@ jobs:
             'https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx' \
             -o app/src/main/assets/models/face_parser_resnet18.onnx
 
+          curl --fail --location --retry 4 \
+            'https://github.com/yakhyo/edgeface-onnx/releases/download/weights/edgeface_xxs.onnx' \
+            -o app/src/main/assets/models/edgeface_xxs.onnx
+
           test -s app/src/main/assets/models/face_landmarker.task
           test -s app/src/main/assets/models/face_parser_resnet18.onnx
+          test -s app/src/main/assets/models/edgeface_xxs.onnx
           sha256sum app/src/main/assets/models/face_landmarker.task | tee app/src/main/assets/models/face_landmarker.sha256
           sha256sum app/src/main/assets/models/face_parser_resnet18.onnx | tee app/src/main/assets/models/face_parser_resnet18.sha256
+          sha256sum app/src/main/assets/models/edgeface_xxs.onnx | tee app/src/main/assets/models/edgeface_xxs.sha256
 
       - name: Compile native v2 APK
         run: gradle --stacktrace :app:assembleDebug
@@ -74,6 +80,7 @@ jobs:
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libfaceswap_v2.so'
           unzip -l "$APK" | grep -q 'assets/models/face_landmarker.task'
           unzip -l "$APK" | grep -q 'assets/models/face_parser_resnet18.onnx'
+          unzip -l "$APK" | grep -q 'assets/models/edgeface_xxs.onnx'
           cp "$APK" FaceSwapPro-v2-alpha1-arm64.apk
           sha256sum FaceSwapPro-v2-alpha1-arm64.apk | tee FaceSwapPro-v2-alpha1-SHA256.txt
 
