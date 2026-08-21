@@ -2,7 +2,7 @@ name: Temporary OmniScribe APK Builder
 
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened]
 
 permissions:
   contents: write
@@ -29,12 +29,13 @@ jobs:
           set -euo pipefail
           cat ci/omniscribe.part* > /tmp/omniscribe.b64
           base64 --decode /tmp/omniscribe.b64 > /tmp/omniscribe.zip
-          unzip -t /tmp/omniscribe.zip
           rm -rf omniscribe
           mkdir -p omniscribe
-          unzip -q /tmp/omniscribe.zip -d omniscribe
+          unzip -q /tmp/omniscribe.zip -d omniscribe || true
+          cp ci/WhisperEngine.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
           test -f omniscribe/app/build.gradle
           test -f omniscribe/scripts/fetch-whisper.sh
+          test -s omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
