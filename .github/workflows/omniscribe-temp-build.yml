@@ -80,6 +80,16 @@ jobs:
           sha256sum OmniScribe-v1.1-arm64.apk | tee OmniScribe-v1.1-arm64.apk.sha256
           unzip -t OmniScribe-v1.1-arm64.apk
 
+      - name: Upload OmniScribe Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniScribe-v1.1-arm64
+          path: |
+            OmniScribe-v1.1-arm64.apk
+            OmniScribe-v1.1-arm64.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish temporary OmniScribe release
         env:
           GH_TOKEN: ${{ github.token }}
