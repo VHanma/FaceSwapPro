@@ -39,6 +39,8 @@ class MovieVideoProcessor(private val context: Context) {
         val swappedFrames: Int,
         val durationUs: Long,
         val sceneCuts: Int = 0,
+        val rerenderedFrames: Int = 0,
+        val averageQuality: Float = 0f,
     )
 
     private data class TrackInfo(
@@ -127,6 +129,8 @@ class MovieVideoProcessor(private val context: Context) {
         var processedFrames = 0
         var swappedFrames = 0
         var sceneCuts = 0
+        var rerenderedFrames = 0
+        var qualitySum = 0.0
         var decoderInputDone = false
         var decoderOutputDone = false
         var encoderOutputDone = false
@@ -187,9 +191,6 @@ class MovieVideoProcessor(private val context: Context) {
                                     val upright = rotate(decoded, rotation)
                                     if (upright !== decoded) decoded.recycle()
 
-                                    // A hard edit must never inherit the previous shot's neural
-                                    // history. False positives are harmless: they only disable
-                                    // smoothing for a frame.
                                     if (cutDetector.isCut(upright)) {
                                         sceneCuts++
                                         swapEngine.resetTemporal()
@@ -199,12 +200,17 @@ class MovieVideoProcessor(private val context: Context) {
                                     val faces = tracker.track(upright, timestampMs)
 
                                     val processedUpright = if (faces.isNotEmpty()) {
-                                        val swapped = swapEngine.swapFrame(upright, faces.first())
+                                        val swapped = swapEngine.swapFrame(
+                                            targetFrame = upright,
+                                            targetFace = faces.first(),
+                                            allowRerender = settings.qualityMode.rerenderFailures,
+                                            minimumQuality = settings.minimumFrameQuality,
+                                        )
                                         swappedFrames++
+                                        if (swapped.rerendered) rerenderedFrames++
+                                        qualitySum += swapped.quality.overall
                                         swapped.bitmap
                                     } else {
-                                        // Tracking loss also breaks temporal continuity. When the
-                                        // face returns it starts clean instead of borrowing stale pixels.
                                         swapEngine.resetTemporal()
                                         upright.copy(Bitmap.Config.ARGB_8888, false)
                                     }
@@ -238,8 +244,10 @@ class MovieVideoProcessor(private val context: Context) {
 
                                     val percent = ((decoderInfo.presentationTimeUs * 94L) / durationUs)
                                         .toInt().coerceIn(1, 94)
+                                    val avgQuality = if (swappedFrames == 0) 0f else
+                                        (qualitySum / swappedFrames).toFloat()
                                     progress(
-                                        "Movie neural frame $processedFrames • swapped $swappedFrames • cuts $sceneCuts",
+                                        "Movie frame $processedFrames • swapped $swappedFrames • rerenders $rerenderedFrames • q ${(avgQuality * 100).toInt()}%",
                                         percent,
                                     )
                                 }
@@ -296,8 +304,17 @@ class MovieVideoProcessor(private val context: Context) {
         } finally {
             tempOutput.delete()
         }
+        val averageQuality = if (swappedFrames == 0) 0f else (qualitySum / swappedFrames).toFloat()
         progress("FaceSwap Pro v2 Movie master complete", 100)
-        Result(savedUri, processedFrames, swappedFrames, durationUs, sceneCuts)
+        Result(
+            savedUri = savedUri,
+            processedFrames = processedFrames,
+            swappedFrames = swappedFrames,
+            durationUs = durationUs,
+            sceneCuts = sceneCuts,
+            rerenderedFrames = rerenderedFrames,
+            averageQuality = averageQuality,
+        )
     }
 
     private fun queueEncoderFrame(
