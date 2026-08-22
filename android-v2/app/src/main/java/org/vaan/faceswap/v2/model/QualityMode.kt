@@ -19,5 +19,7 @@ data class ProcessingSettings(
     val enableOcclusionRecovery: Boolean = qualityMode != QualityMode.FAST,
     val enableRelighting: Boolean = qualityMode != QualityMode.FAST,
     val enableCameraMatch: Boolean = qualityMode == QualityMode.MOVIE,
-    val minimumFrameQuality: Float = if (qualityMode == QualityMode.MOVIE) 0.88f else 0.72f,
+    // Calibrated for the independent composite score, where 1.0 means all five
+    // identity/geometry/mask/temporal/lighting gates are essentially ideal.
+    val minimumFrameQuality: Float = if (qualityMode == QualityMode.MOVIE) 0.80f else 0.70f,
 )
