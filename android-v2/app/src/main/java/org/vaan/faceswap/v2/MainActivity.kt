@@ -22,6 +22,8 @@ import org.vaan.faceswap.v2.engine.NeuralModelPackManager
 import org.vaan.faceswap.v2.engine.NeuralSwapPreviewRunner
 import org.vaan.faceswap.v2.engine.SemanticMaskAnalyzer
 import org.vaan.faceswap.v2.engine.VideoTrackingAnalyzer
+import org.vaan.faceswap.v2.media.MovieVideoProcessor
+import org.vaan.faceswap.v2.model.ProcessingSettings
 import org.vaan.faceswap.v2.model.QualityMode
 import org.vaan.faceswap.v2.nativebridge.RuntimeSelector
 
@@ -48,6 +50,8 @@ private fun FaceSwapV2Screen() {
     var vaultBusy by remember { mutableStateOf(false) }
     var packBusy by remember { mutableStateOf(false) }
     var previewBusy by remember { mutableStateOf(false) }
+    var videoBusy by remember { mutableStateOf(false) }
+    var cancelVideo by remember { mutableStateOf(false) }
     var packInstalled by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -78,7 +82,7 @@ private fun FaceSwapV2Screen() {
                 Text(if (sources.isEmpty()) "Choose identity photos" else "Identity photos: ${sources.size}")
             }
             Button(
-                enabled = sources.isNotEmpty() && !vaultBusy,
+                enabled = sources.isNotEmpty() && !vaultBusy && !videoBusy,
                 onClick = {
                     vaultBusy = true
                     status = "Building pose-aware 512-D Identity Vault…"
@@ -96,7 +100,7 @@ private fun FaceSwapV2Screen() {
             ) { Text(if (vaultBusy) "Building Identity Vault…" else "Build Identity Vault") }
 
             Button(
-                enabled = sources.isNotEmpty() && !maskBusy,
+                enabled = sources.isNotEmpty() && !maskBusy && !videoBusy,
                 onClick = {
                     val selected = sources.firstOrNull() ?: return@Button
                     maskBusy = true
@@ -114,12 +118,15 @@ private fun FaceSwapV2Screen() {
 
             HorizontalDivider()
             Text("Target video", style = MaterialTheme.typography.headlineSmall)
-            Button(onClick = { videoPicker.launch(arrayOf("video/*")) }) {
+            Button(
+                enabled = !videoBusy,
+                onClick = { videoPicker.launch(arrayOf("video/*")) }
+            ) {
                 Text(if (video == null) "Choose target video" else "Target video selected")
             }
 
             Button(
-                enabled = video != null && !trackingBusy,
+                enabled = video != null && !trackingBusy && !videoBusy,
                 onClick = {
                     val selected = video ?: return@Button
                     trackingBusy = true
@@ -141,6 +148,7 @@ private fun FaceSwapV2Screen() {
                 QualityMode.entries.forEach { candidate ->
                     FilterChip(
                         selected = mode == candidate,
+                        enabled = !videoBusy,
                         onClick = { mode = candidate },
                         label = { Text(candidate.label) }
                     )
@@ -149,8 +157,8 @@ private fun FaceSwapV2Screen() {
             Text(
                 when (mode) {
                     QualityMode.FAST -> "256px internal face render, minimal refinement."
-                    QualityMode.BALANCED -> "512px render, semantic/temporal refinement path enabled."
-                    QualityMode.MOVIE -> "512px neural identity synthesis, semantic compositing and maximum refinement path."
+                    QualityMode.BALANCED -> "512px render, semantic refinement with a faster mastering profile."
+                    QualityMode.MOVIE -> "512px neural identity synthesis, semantic compositing and maximum mastering bitrate."
                 }
             )
 
@@ -164,7 +172,7 @@ private fun FaceSwapV2Screen() {
                 }
             )
             Button(
-                enabled = !packBusy,
+                enabled = !packBusy && !videoBusy,
                 onClick = {
                     if (packInstalled) {
                         status = "Movie Neural Pack is installed and verified."
@@ -194,7 +202,7 @@ private fun FaceSwapV2Screen() {
             ) { Text(if (packBusy) "Installing neural models…" else if (packInstalled) "Verify Movie Neural Pack" else "Install Movie Neural Pack") }
 
             Button(
-                enabled = packInstalled && sources.isNotEmpty() && video != null && !previewBusy,
+                enabled = packInstalled && sources.isNotEmpty() && video != null && !previewBusy && !videoBusy,
                 onClick = {
                     val selectedVideo = video ?: return@Button
                     previewBusy = true
@@ -209,19 +217,59 @@ private fun FaceSwapV2Screen() {
                 }
             ) { Text(if (previewBusy) "Rendering neural preview…" else "Render Movie neural preview") }
 
+            Button(
+                enabled = packInstalled && sources.isNotEmpty() && video != null && !videoBusy && !previewBusy,
+                onClick = {
+                    val selectedVideo = video ?: return@Button
+                    cancelVideo = false
+                    videoBusy = true
+                    status = "Starting ${mode.label} full-video neural replacement…"
+                    scope.launch {
+                        status = runCatching {
+                            val result = MovieVideoProcessor(context.applicationContext).process(
+                                identitySources = sources,
+                                targetVideo = selectedVideo,
+                                settings = ProcessingSettings(mode),
+                                progress = { message, percent ->
+                                    scope.launch { status = "$percent% • $message" }
+                                },
+                                cancelled = { cancelVideo },
+                            )
+                            "VIDEO SAVED • ${result.processedFrames} frames • ${result.swappedFrames} swapped • Movies/FaceSwapPro"
+                        }.getOrElse {
+                            if (cancelVideo || it.message == "Cancelled") "Video render cancelled" else "Video render error: ${it.message}"
+                        }
+                        videoBusy = false
+                        cancelVideo = false
+                    }
+                }
+            ) {
+                Text(if (videoBusy) "Rendering full video…" else "Render full ${mode.label} video")
+            }
+
+            if (videoBusy) {
+                OutlinedButton(onClick = {
+                    cancelVideo = true
+                    status = "Cancelling after the current frame…"
+                }) { Text("Cancel render") }
+            }
+
             HorizontalDivider()
-            Button(onClick = {
-                status = runCatching { RuntimeSelector.report().toString() }
-                    .fold(
-                        onSuccess = { it },
-                        onFailure = { "Runtime probe error: ${it.message}" }
-                    )
-            }) { Text("Probe AI acceleration") }
+            Button(
+                enabled = !videoBusy,
+                onClick = {
+                    status = runCatching { RuntimeSelector.report().toString() }
+                        .fold(
+                            onSuccess = { it },
+                            onFailure = { "Runtime probe error: ${it.message}" }
+                        )
+                }
+            ) { Text("Probe AI acceleration") }
 
             Button(
-                enabled = sources.isNotEmpty() && video != null,
+                enabled = sources.isNotEmpty() && video != null && !videoBusy,
                 onClick = {
-                    status = "Inputs ready. Pipeline: 478-point tracking → pose-aware identity selection → SimSwap 512 → 19-region compositor → temporal/relight/restoration → quality gate."
+                    status = "Inputs ready. Pipeline: 478-point tracking → pose-aware identity selection → SimSwap 512 → 19-region compositor → native H.264/audio-preserving master."
                 }
             ) { Text("Prepare v2 pipeline") }
 
