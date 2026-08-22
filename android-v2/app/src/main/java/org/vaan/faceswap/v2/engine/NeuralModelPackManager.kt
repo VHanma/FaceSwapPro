@@ -14,7 +14,7 @@ import java.security.MessageDigest
  * Optional high-quality neural pack.
  *
  * These exact weights are not hidden inside the base APK: the pack is large and
- * its upstream models carry research/non-commercial usage terms. The user can
+ * its upstream models carry research/non-commercial/GPL usage terms. The user can
  * install it once, hashes are verified, and inference is offline afterward.
  */
 class NeuralModelPackManager(private val context: Context) {
@@ -55,6 +55,14 @@ class NeuralModelPackManager(private val context: Context) {
             sha256 = "fe805d1ce7d9e66322e2a8811f593a821e7d92f9ff861dd233794bdb2bb7a586",
             bytes = 239_249_034L,
         ),
+        // DeepFaceLab XSeg v3, used as an arbitrary foreground/occlusion gate.
+        // Upstream FaceFusion metadata identifies XSeg weights as GPL-3.0.
+        ModelSpec(
+            fileName = "xseg_3.onnx",
+            url = "https://github.com/facefusion/facefusion-assets/releases/download/models-3.2.0/xseg_3.onnx",
+            sha256 = "48ccd7e8541e159a5a754ec9e62df2f12065f7df8f9af842c1750342c6533559",
+            bytes = 70_327_709L,
+        ),
     )
 
     val requiredBytes: Long get() = movieResearchPack.sumOf { it.bytes }
@@ -62,10 +70,7 @@ class NeuralModelPackManager(private val context: Context) {
     fun availableBytes(): Long = StatFs(directory.parentFile?.absolutePath ?: context.filesDir.absolutePath).availableBytes
 
     suspend fun verifyInstalled(): Boolean = withContext(Dispatchers.IO) {
-        movieResearchPack.all { spec ->
-            val file = File(directory, spec.fileName)
-            file.isFile && file.length() == spec.bytes && sha256(file).equals(spec.sha256, ignoreCase = true)
-        }
+        movieResearchPack.all { isValid(it) }
     }
 
     suspend fun install(
@@ -73,15 +78,16 @@ class NeuralModelPackManager(private val context: Context) {
     ): List<File> = withContext(Dispatchers.IO) {
         directory.mkdirs()
         val safetyMargin = 160L * 1024L * 1024L
-        require(availableBytes() >= requiredBytes + safetyMargin) {
-            "Movie Neural Pack needs about ${formatBytes(requiredBytes + safetyMargin)} free; available ${formatBytes(availableBytes())}"
+        val missingBytes = movieResearchPack.filterNot { isValid(it) }.sumOf { it.bytes }
+        require(availableBytes() >= missingBytes + safetyMargin) {
+            "Movie Neural Pack needs about ${formatBytes(missingBytes + safetyMargin)} free; available ${formatBytes(availableBytes())}"
         }
 
         var completeBeforeCurrent = 0L
         val installed = mutableListOf<File>()
         for (spec in movieResearchPack) {
             val destination = File(directory, spec.fileName)
-            if (destination.isFile && destination.length() == spec.bytes && sha256(destination).equals(spec.sha256, true)) {
+            if (isValid(spec)) {
                 completeBeforeCurrent += spec.bytes
                 installed += destination
                 onProgress(Progress(spec.fileName, spec.bytes, spec.bytes, completeBeforeCurrent, requiredBytes))
@@ -113,6 +119,13 @@ class NeuralModelPackManager(private val context: Context) {
 
     fun deletePack() {
         directory.deleteRecursively()
+    }
+
+    private fun isValid(spec: ModelSpec): Boolean {
+        val file = File(directory, spec.fileName)
+        return file.isFile &&
+            file.length() == spec.bytes &&
+            sha256(file).equals(spec.sha256, ignoreCase = true)
     }
 
     private fun download(
