@@ -64,7 +64,9 @@ class TrackerManager(
                 landmarks = face.map { p -> Point3(p.x(), p.y(), p.z()) },
                 blendshapes = blendshapes,
                 transformationMatrix = transforms.getOrNull(index)?.copyOf() ?: floatArrayOf(),
-                timestampMs = result.timestampMs(),
+                // Keep the media timestamp supplied to detectForVideo. This avoids
+                // coupling temporal logic to result-class timestamp API differences.
+                timestampMs = timestampMs,
             )
         }
     }
