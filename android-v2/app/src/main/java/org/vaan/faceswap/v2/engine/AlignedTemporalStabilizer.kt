@@ -51,15 +51,21 @@ class AlignedTemporalStabilizer : AutoCloseable {
             return Output(current.copy(Bitmap.Config.ARGB_8888, false), alpha.copyOf())
         }
 
+        // Explicit non-null bindings keep the temporal state obvious to both the
+        // compiler and future maintenance. Reaching this point means reset checks passed.
+        val stablePrevious = previous ?: error("Temporal bitmap state vanished")
+        val stableMask = previousMask ?: error("Temporal alpha state vanished")
+        val stablePose = previousPoseValue ?: error("Temporal pose state vanished")
+
         val expressionDelta = max(
             expressionDelta(face.blendshapes, "jawOpen", "mouthFunnel", "mouthPucker"),
             expressionDelta(face.blendshapes, "eyeBlinkLeft", "eyeBlinkRight"),
         )
         val poseDelta = max(
-            abs(previousPoseValue.yaw - pose.yaw) / 20f,
+            abs(stablePose.yaw - pose.yaw) / 20f,
             max(
-                abs(previousPoseValue.pitch - pose.pitch) / 16f,
-                abs(previousPoseValue.roll - pose.roll) / 20f,
+                abs(stablePose.pitch - pose.pitch) / 16f,
+                abs(stablePose.roll - pose.roll) / 20f,
             ),
         ).coerceIn(0f, 1f)
 
@@ -72,12 +78,20 @@ class AlignedTemporalStabilizer : AutoCloseable {
         val currentPixels = IntArray(alpha.size)
         val previousPixels = IntArray(alpha.size)
         current.getPixels(currentPixels, 0, current.width, 0, 0, current.width, current.height)
-        previous.getPixels(previousPixels, 0, previous.width, 0, 0, previous.width, previous.height)
+        stablePrevious.getPixels(
+            previousPixels,
+            0,
+            stablePrevious.width,
+            0,
+            0,
+            stablePrevious.width,
+            stablePrevious.height,
+        )
         val stabilizedAlpha = ByteArray(alpha.size)
 
         for (i in currentPixels.indices) {
             val currentA = alpha[i].toInt() and 0xff
-            val previousA = previousMask[i].toInt() and 0xff
+            val previousA = stableMask[i].toInt() and 0xff
             // Only borrow history where both frames agree that this is identity
             // territory. This prevents stale face pixels bleeding over hair/mouth.
             val agreement = minOf(currentA, previousA) / 255f
