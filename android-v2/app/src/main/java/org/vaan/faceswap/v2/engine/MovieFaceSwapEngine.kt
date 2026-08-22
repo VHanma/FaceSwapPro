@@ -13,7 +13,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * v2 neural replacement path:
  * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
- * spatial relighting -> expression-aware temporal stabilization -> semantic composite.
+ * semantic + arbitrary occlusion gating -> spatial relighting ->
+ * expression-aware temporal stabilization -> composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -31,6 +32,7 @@ class MovieFaceSwapEngine(
     private val converter = CrossFaceSimSwapConverter(pack.file("crossface_simswap.onnx"))
     private val swapper = SimSwap512Engine(pack.file("simswap_unofficial_512.onnx"))
     private val parser = SemanticFaceParser(context)
+    private val occluder = FaceOcclusionMasker(pack.file("xseg_3.onnx"))
     private val sourceAnalyzer = SourceFaceAnalyzer(context)
     private val temporal = AlignedTemporalStabilizer()
     private val convertedEmbeddingCache = ConcurrentHashMap<String, FloatArray>()
@@ -63,10 +65,14 @@ class MovieFaceSwapEngine(
             throw throwable
         }
 
-        // Parse the real target crop, not the generated face. This mask tells the
-        // relighter/compositor exactly where target skin/identity pixels live.
+        // BiSeNet answers "which facial regions belong to identity?" while XSeg
+        // answers "which of those pixels are actually visible?". Their minimum
+        // keeps hair/glasses/mouth semantics AND arbitrary crossing objects intact.
         val semantic = parser.parse(alignment.bitmap)
-        val rawMask = semantic.identityCompositeMask()
+        val semanticMask = semantic.identityCompositeMask()
+        val visibleMask = occluder.visibleFaceMask(alignment.bitmap, semantic.width)
+        val rawMask = intersectMasks(semanticMask, visibleMask)
+
         val relit = SpatialRelighter.match(
             generated = generated,
             target = alignment.bitmap,
@@ -124,9 +130,16 @@ class MovieFaceSwapEngine(
         }
     }
 
+    private fun intersectMasks(a: ByteArray, b: ByteArray): ByteArray {
+        require(a.size == b.size)
+        return ByteArray(a.size) { i ->
+            minOf(a[i].toInt() and 0xff, b[i].toInt() and 0xff).toByte()
+        }
+    }
+
     /**
      * Keeps only neural identity pixels. Hair, glasses, mouth interior and all
-     * other target regions remain transparent and therefore remain target footage.
+     * foreground occluders remain transparent and therefore remain target footage.
      */
     private fun applyAlpha(generated: Bitmap, alpha: ByteArray): Bitmap {
         require(generated.width * generated.height == alpha.size)
@@ -163,6 +176,7 @@ class MovieFaceSwapEngine(
     override fun close() {
         temporal.close()
         sourceAnalyzer.close()
+        occluder.close()
         parser.close()
         swapper.close()
         converter.close()
