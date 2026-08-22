@@ -14,7 +14,8 @@ import java.util.concurrent.ConcurrentHashMap
  * v2 neural replacement path:
  * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
  * semantic + arbitrary occlusion gating -> spatial relighting -> micro-detail
- * restoration -> expression-aware temporal stabilization -> composite.
+ * restoration -> independent quality gate/alternate-reference rerender ->
+ * expression-aware temporal stabilization -> composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -26,6 +27,14 @@ class MovieFaceSwapEngine(
         val bitmap: Bitmap,
         val sourceReference: IdentityReference,
         val targetPose: FacePoseQuality.Pose,
+        val quality: FrameQuality,
+        val rerendered: Boolean,
+    )
+
+    private data class Candidate(
+        val reference: IdentityReference,
+        val restored: Bitmap,
+        val evaluation: FrameQualityEvaluator.Candidate,
     )
 
     private val arcFace = ArcFaceR50Encoder(pack.file("arcface_w600k_r50.onnx"))
@@ -35,16 +44,19 @@ class MovieFaceSwapEngine(
     private val occluder = FaceOcclusionMasker(pack.file("xseg_3.onnx"))
     private val sourceAnalyzer = SourceFaceAnalyzer(context)
     private val temporal = AlignedTemporalStabilizer()
+    private val qualityEvaluator = FrameQualityEvaluator(context, vault)
     private val convertedEmbeddingCache = ConcurrentHashMap<String, FloatArray>()
 
     suspend fun swapFrame(
         targetFrame: Bitmap,
         targetFace: TrackerManager.TrackedFace,
+        allowRerender: Boolean = true,
+        minimumQuality: Float = 0.78f,
     ): SwapResult = withContext(Dispatchers.Default) {
         val pose = FacePoseQuality.estimatePose(targetFace)
-        val reference = vault.bestReference(pose.yaw, pose.pitch)
+        val rankedReferences = vault.rankedReferences(pose.yaw, pose.pitch)
+        val primaryReference = rankedReferences.firstOrNull()
             ?: error("Identity Vault has no usable source reference")
-        val convertedIdentity = convertedEmbedding(reference)
 
         val targetPoints = FaceAligner.fivePoints(
             targetFace.landmarks,
@@ -58,72 +70,166 @@ class MovieFaceSwapEngine(
             width = SimSwap512Engine.SIZE,
         )
 
-        val generated = try {
-            swapper.swapAligned(alignment.bitmap, convertedIdentity)
-        } catch (throwable: Throwable) {
+        try {
+            // Target analysis is shared across rerender candidates.
+            val semantic = parser.parse(alignment.bitmap)
+            val semanticMask = semantic.identityCompositeMask()
+            val visibleMask = occluder.visibleFaceMask(alignment.bitmap, semantic.width)
+            val rawMask = intersectMasks(semanticMask, visibleMask)
+            val visibleSkin = intersectMasks(
+                semantic.binaryMask(SemanticFaceParser.Region.SKIN),
+                visibleMask,
+            )
+            val alphaMask = MaskFeather.feather(
+                mask = rawMask,
+                width = semantic.width,
+                height = semantic.height,
+                radius = 7,
+                passes = 2,
+            )
+
+            var chosen = renderCandidate(
+                reference = primaryReference,
+                targetFrame = targetFrame,
+                targetFace = targetFace,
+                pose = pose,
+                alignment = alignment,
+                rawMask = rawMask,
+                visibleSkin = visibleSkin,
+                alphaMask = alphaMask,
+            )
+            var rerendered = false
+
+            if (
+                allowRerender &&
+                chosen.evaluation.quality.overall < minimumQuality &&
+                rankedReferences.size > 1
+            ) {
+                rerendered = true
+                val alternate = renderCandidate(
+                    reference = rankedReferences[1],
+                    targetFrame = targetFrame,
+                    targetFace = targetFace,
+                    pose = pose,
+                    alignment = alignment,
+                    rawMask = rawMask,
+                    visibleSkin = visibleSkin,
+                    alphaMask = alphaMask,
+                )
+                if (alternate.evaluation.quality.overall > chosen.evaluation.quality.overall) {
+                    chosen.restored.recycle()
+                    chosen = alternate
+                } else {
+                    alternate.restored.recycle()
+                }
+            }
+
+            qualityEvaluator.accept(chosen.evaluation)
+            val stabilized = temporal.stabilize(
+                current = chosen.restored,
+                alpha = alphaMask,
+                face = targetFace,
+                pose = pose,
+            )
+            val maskedGenerated = applyAlpha(stabilized.bitmap, stabilized.alpha)
+            val output = targetFrame.copy(Bitmap.Config.ARGB_8888, true)
+            Canvas(output).drawBitmap(
+                maskedGenerated,
+                alignment.alignedToSource,
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+            )
+
+            maskedGenerated.recycle()
+            stabilized.bitmap.recycle()
+            chosen.restored.recycle()
+
+            SwapResult(
+                bitmap = output,
+                sourceReference = chosen.reference,
+                targetPose = pose,
+                quality = chosen.evaluation.quality,
+                rerendered = rerendered,
+            )
+        } finally {
             alignment.bitmap.recycle()
-            throw throwable
         }
-
-        // BiSeNet answers "which facial regions belong to identity?" while XSeg
-        // answers "which of those pixels are actually visible?". Their minimum
-        // keeps hair/glasses/mouth semantics AND arbitrary crossing objects intact.
-        val semantic = parser.parse(alignment.bitmap)
-        val semanticMask = semantic.identityCompositeMask()
-        val visibleMask = occluder.visibleFaceMask(alignment.bitmap, semantic.width)
-        val rawMask = intersectMasks(semanticMask, visibleMask)
-        val visibleSkin = intersectMasks(
-            semantic.binaryMask(SemanticFaceParser.Region.SKIN),
-            visibleMask,
-        )
-
-        val relit = SpatialRelighter.match(
-            generated = generated,
-            target = alignment.bitmap,
-            identityMask = rawMask,
-            strength = 0.82f,
-        )
-        val restored = MicroDetailRestorer.restore(
-            generated = relit,
-            target = alignment.bitmap,
-            skinVisibleMask = visibleSkin,
-            generatedDetailStrength = 0.16f,
-            targetTextureStrength = 0.10f,
-        )
-        val alphaMask = MaskFeather.feather(
-            mask = rawMask,
-            width = semantic.width,
-            height = semantic.height,
-            radius = 7,
-            passes = 2,
-        )
-
-        val stabilized = temporal.stabilize(
-            current = restored,
-            alpha = alphaMask,
-            face = targetFace,
-            pose = pose,
-        )
-        val maskedGenerated = applyAlpha(stabilized.bitmap, stabilized.alpha)
-        val output = targetFrame.copy(Bitmap.Config.ARGB_8888, true)
-        Canvas(output).drawBitmap(
-            maskedGenerated,
-            alignment.alignedToSource,
-            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
-        )
-
-        maskedGenerated.recycle()
-        stabilized.bitmap.recycle()
-        restored.recycle()
-        relit.recycle()
-        generated.recycle()
-        alignment.bitmap.recycle()
-
-        SwapResult(output, reference, pose)
     }
 
-    /** Reset temporal history after scene cuts, tracking loss or subject changes. */
-    fun resetTemporal() = temporal.reset()
+    private fun renderCandidate(
+        reference: IdentityReference,
+        targetFrame: Bitmap,
+        targetFace: TrackerManager.TrackedFace,
+        pose: FacePoseQuality.Pose,
+        alignment: FaceAligner.Alignment,
+        rawMask: ByteArray,
+        visibleSkin: ByteArray,
+        alphaMask: ByteArray,
+    ): Candidate {
+        val generated = swapper.swapAligned(alignment.bitmap, convertedEmbedding(reference))
+        val relit = try {
+            SpatialRelighter.match(
+                generated = generated,
+                target = alignment.bitmap,
+                identityMask = rawMask,
+                strength = 0.82f,
+            )
+        } finally {
+            generated.recycle()
+        }
+        val restored = try {
+            MicroDetailRestorer.restore(
+                generated = relit,
+                target = alignment.bitmap,
+                skinVisibleMask = visibleSkin,
+                generatedDetailStrength = 0.16f,
+                targetTextureStrength = 0.10f,
+            )
+        } finally {
+            relit.recycle()
+        }
+
+        val provisional = composite(targetFrame, restored, alphaMask, alignment)
+        val evaluation = try {
+            qualityEvaluator.evaluate(
+                composedFrame = provisional,
+                targetFace = targetFace,
+                reference = reference,
+                targetPose = pose,
+                alignedGenerated = restored,
+                alignedTarget = alignment.bitmap,
+                alpha = alphaMask,
+            )
+        } finally {
+            provisional.recycle()
+        }
+        return Candidate(reference, restored, evaluation)
+    }
+
+    private fun composite(
+        targetFrame: Bitmap,
+        alignedGenerated: Bitmap,
+        alpha: ByteArray,
+        alignment: FaceAligner.Alignment,
+    ): Bitmap {
+        val masked = applyAlpha(alignedGenerated, alpha)
+        return try {
+            targetFrame.copy(Bitmap.Config.ARGB_8888, true).also { output ->
+                Canvas(output).drawBitmap(
+                    masked,
+                    alignment.alignedToSource,
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+                )
+            }
+        } finally {
+            masked.recycle()
+        }
+    }
+
+    /** Reset temporal and QC history after scene cuts, tracking loss or subject changes. */
+    fun resetTemporal() {
+        temporal.reset()
+        qualityEvaluator.resetTemporal()
+    }
 
     private fun convertedEmbedding(reference: IdentityReference): FloatArray {
         val key = reference.uri.toString()
@@ -187,6 +293,7 @@ class MovieFaceSwapEngine(
 
     override fun close() {
         temporal.close()
+        qualityEvaluator.close()
         sourceAnalyzer.close()
         occluder.close()
         parser.close()
