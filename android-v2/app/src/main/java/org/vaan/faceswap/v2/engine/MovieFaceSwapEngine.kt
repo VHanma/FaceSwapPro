@@ -13,8 +13,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * v2 neural replacement path:
  * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
- * semantic + arbitrary occlusion gating -> spatial relighting ->
- * expression-aware temporal stabilization -> composite.
+ * semantic + arbitrary occlusion gating -> spatial relighting -> micro-detail
+ * restoration -> expression-aware temporal stabilization -> composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -72,12 +72,23 @@ class MovieFaceSwapEngine(
         val semanticMask = semantic.identityCompositeMask()
         val visibleMask = occluder.visibleFaceMask(alignment.bitmap, semantic.width)
         val rawMask = intersectMasks(semanticMask, visibleMask)
+        val visibleSkin = intersectMasks(
+            semantic.binaryMask(SemanticFaceParser.Region.SKIN),
+            visibleMask,
+        )
 
         val relit = SpatialRelighter.match(
             generated = generated,
             target = alignment.bitmap,
             identityMask = rawMask,
             strength = 0.82f,
+        )
+        val restored = MicroDetailRestorer.restore(
+            generated = relit,
+            target = alignment.bitmap,
+            skinVisibleMask = visibleSkin,
+            generatedDetailStrength = 0.16f,
+            targetTextureStrength = 0.10f,
         )
         val alphaMask = MaskFeather.feather(
             mask = rawMask,
@@ -88,7 +99,7 @@ class MovieFaceSwapEngine(
         )
 
         val stabilized = temporal.stabilize(
-            current = relit,
+            current = restored,
             alpha = alphaMask,
             face = targetFace,
             pose = pose,
@@ -103,6 +114,7 @@ class MovieFaceSwapEngine(
 
         maskedGenerated.recycle()
         stabilized.bitmap.recycle()
+        restored.recycle()
         relit.recycle()
         generated.recycle()
         alignment.bitmap.recycle()
