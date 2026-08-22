@@ -14,7 +14,22 @@ class TrackerManager(
 ) : AutoCloseable {
 
     data class Point3(val x: Float, val y: Float, val z: Float)
-    data class TrackedFace(val landmarks: List<Point3>)
+
+    data class TrackedFace(
+        val landmarks: List<Point3>,
+        val blendshapes: Map<String, Float> = emptyMap(),
+        /** 4x4 canonical-face -> detected-face matrix, flat column-major. */
+        val transformationMatrix: FloatArray = floatArrayOf(),
+        val timestampMs: Long = 0L,
+    ) {
+        fun expression(name: String): Float = blendshapes[name] ?: 0f
+
+        val mouthOpen: Float
+            get() = maxOf(expression("jawOpen"), expression("mouthFunnel"), expression("mouthPucker"))
+
+        val blink: Float
+            get() = maxOf(expression("eyeBlinkLeft"), expression("eyeBlinkRight"))
+    }
 
     private val landmarker: FaceLandmarker
 
@@ -38,8 +53,19 @@ class TrackerManager(
     fun track(bitmap: Bitmap, timestampMs: Long): List<TrackedFace> {
         val image = BitmapImageBuilder(bitmap).build()
         val result = landmarker.detectForVideo(image, timestampMs)
-        return result.faceLandmarks().map { face ->
-            TrackedFace(face.map { p -> Point3(p.x(), p.y(), p.z()) })
+        val blendshapeFaces = result.faceBlendshapes().orElse(emptyList())
+        val transforms = result.facialTransformationMatrixes().orElse(emptyList())
+
+        return result.faceLandmarks().mapIndexed { index, face ->
+            val blendshapes = blendshapeFaces.getOrNull(index)
+                ?.associate { category -> category.categoryName() to category.score() }
+                ?: emptyMap()
+            TrackedFace(
+                landmarks = face.map { p -> Point3(p.x(), p.y(), p.z()) },
+                blendshapes = blendshapes,
+                transformationMatrix = transforms.getOrNull(index)?.copyOf() ?: floatArrayOf(),
+                timestampMs = result.timestampMs(),
+            )
         }
     }
 
