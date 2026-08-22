@@ -41,6 +41,9 @@ object Yuv420Converter {
                 val uu = uBuffer.get(chromaY * uRowStride + chromaX * uPixelStride).toInt() and 0xff
                 val vv = vBuffer.get(chromaY * vRowStride + chromaX * vPixelStride).toInt() and 0xff
 
+                // Limited-range YUV -> RGB. This intentionally matches the SDR
+                // mastering path. Color-standard-aware matrices can be layered on
+                // top without changing the decoder plane/stride handling.
                 val c = (yy - 16).coerceAtLeast(0)
                 val d = uu - 128
                 val e = vv - 128
@@ -76,24 +79,49 @@ object Yuv420Converter {
         val uPlane = ByteArray(chromaSize)
         val vPlane = ByteArray(chromaSize)
 
-        var yIndex = 0
-        var uvIndex = 0
+        // Luma is full-resolution.
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val pixel = pixels[y * width + x]
                 val r = (pixel shr 16) and 0xff
                 val g = (pixel shr 8) and 0xff
                 val b = pixel and 0xff
-                val yValue = (16f + 0.257f * r + 0.504f * g + 0.098f * b).roundToInt().coerceIn(16, 235)
-                yPlane[yIndex++] = yValue.toByte()
+                val yValue = (16f + 0.257f * r + 0.504f * g + 0.098f * b)
+                    .roundToInt()
+                    .coerceIn(16, 235)
+                yPlane[y * width + x] = yValue.toByte()
+            }
+        }
 
-                if (y % 2 == 0 && x % 2 == 0) {
-                    val uValue = (128f - 0.148f * r - 0.291f * g + 0.439f * b).roundToInt().coerceIn(16, 240)
-                    val vValue = (128f + 0.439f * r - 0.368f * g - 0.071f * b).roundToInt().coerceIn(16, 240)
-                    uPlane[uvIndex] = uValue.toByte()
-                    vPlane[uvIndex] = vValue.toByte()
-                    uvIndex++
+        // 4:2:0 chroma must represent the whole 2x2 block. Sampling only the
+        // top-left pixel creates colored stair-steps around lips, hair and mask
+        // edges, so average all four RGB pixels before computing U/V.
+        var uvIndex = 0
+        for (y in 0 until height step 2) {
+            for (x in 0 until width step 2) {
+                var rSum = 0
+                var gSum = 0
+                var bSum = 0
+                for (dy in 0..1) {
+                    for (dx in 0..1) {
+                        val pixel = pixels[(y + dy) * width + (x + dx)]
+                        rSum += (pixel shr 16) and 0xff
+                        gSum += (pixel shr 8) and 0xff
+                        bSum += pixel and 0xff
+                    }
                 }
+                val r = rSum * 0.25f
+                val g = gSum * 0.25f
+                val b = bSum * 0.25f
+                val uValue = (128f - 0.148f * r - 0.291f * g + 0.439f * b)
+                    .roundToInt()
+                    .coerceIn(16, 240)
+                val vValue = (128f + 0.439f * r - 0.368f * g - 0.071f * b)
+                    .roundToInt()
+                    .coerceIn(16, 240)
+                uPlane[uvIndex] = uValue.toByte()
+                vPlane[uvIndex] = vValue.toByte()
+                uvIndex++
             }
         }
 
