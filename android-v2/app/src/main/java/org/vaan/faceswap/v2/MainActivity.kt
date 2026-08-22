@@ -77,7 +77,7 @@ private fun FaceSwapV2Screen() {
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text("Identity Vault", style = MaterialTheme.typography.headlineSmall)
-            Text("Add up to 8 source photos. Front, 3/4 and profile angles are analyzed, identity-encoded and selected per target frame.")
+            Text("Add up to 8 source photos. Front, 3/4 and profile angles are 3D-pose analyzed, identity-encoded and selected per target frame.")
             Button(onClick = { sourcePicker.launch(arrayOf("image/*")) }) {
                 Text(if (sources.isEmpty()) "Choose identity photos" else "Identity photos: ${sources.size}")
             }
@@ -156,9 +156,9 @@ private fun FaceSwapV2Screen() {
             }
             Text(
                 when (mode) {
-                    QualityMode.FAST -> "256px internal face render, minimal refinement."
-                    QualityMode.BALANCED -> "512px render, semantic refinement with a faster mastering profile."
-                    QualityMode.MOVIE -> "512px neural identity synthesis, semantic compositing and maximum mastering bitrate."
+                    QualityMode.FAST -> "Neural identity replacement with the fastest mastering bitrate."
+                    QualityMode.BALANCED -> "512px neural replacement, semantic/XSeg occlusion masks, relighting and temporal stabilization."
+                    QualityMode.MOVIE -> "Maximum 512px neural quality, occlusion preservation, spatial relighting, expression-aware temporal stabilization and HQ mastering."
                 }
             )
 
@@ -166,9 +166,9 @@ private fun FaceSwapV2Screen() {
             Text("Movie Neural Pack", style = MaterialTheme.typography.headlineSmall)
             Text(
                 if (packInstalled) {
-                    "Installed + SHA-256 verified. Neural synthesis runs offline after installation."
+                    "Installed + SHA-256 verified. Neural synthesis and XSeg occlusion inference run offline after installation."
                 } else {
-                    "Optional ~416 MiB research/non-commercial model pack: ArcFace R50 + CrossFace + SimSwap 512."
+                    "Optional ${NeuralModelPackManager.formatBytes(pack.requiredBytes)} research/non-commercial/GPL model pack: ArcFace R50 + CrossFace + SimSwap 512 + XSeg occlusion."
                 }
             )
             Button(
@@ -206,7 +206,7 @@ private fun FaceSwapV2Screen() {
                 onClick = {
                     val selectedVideo = video ?: return@Button
                     previewBusy = true
-                    status = "Rendering real SimSwap-512 neural preview…"
+                    status = "Rendering neural preview with semantic + XSeg occlusion masking…"
                     scope.launch {
                         status = runCatching {
                             val result = NeuralSwapPreviewRunner(context).run(sources, selectedVideo, pack)
@@ -235,7 +235,7 @@ private fun FaceSwapV2Screen() {
                                 },
                                 cancelled = { cancelVideo },
                             )
-                            "VIDEO SAVED • ${result.processedFrames} frames • ${result.swappedFrames} swapped • Movies/FaceSwapPro"
+                            "VIDEO SAVED • ${result.processedFrames} frames • ${result.swappedFrames} swapped • ${result.sceneCuts} scene cuts • Movies/FaceSwapPro"
                         }.getOrElse {
                             if (cancelVideo || it.message == "Cancelled") "Video render cancelled" else "Video render error: ${it.message}"
                         }
@@ -269,7 +269,7 @@ private fun FaceSwapV2Screen() {
             Button(
                 enabled = sources.isNotEmpty() && video != null && !videoBusy,
                 onClick = {
-                    status = "Inputs ready. Pipeline: 478-point tracking → pose-aware identity selection → SimSwap 512 → 19-region compositor → native H.264/audio-preserving master."
+                    status = "Inputs ready. Pipeline: 478-point + 3D transform tracking → pose-aware identity → SimSwap 512 → semantic + XSeg occlusion → spatial relighting → expression-aware temporal stabilization → HQ H.264/audio master."
                 }
             ) { Text("Prepare v2 pipeline") }
 
