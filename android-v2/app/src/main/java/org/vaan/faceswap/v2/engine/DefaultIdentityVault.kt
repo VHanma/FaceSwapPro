@@ -13,8 +13,8 @@ import kotlin.math.sqrt
  * Multi-photo source identity store.
  *
  * Each photo is independently detected/aligned, encoded with EdgeFace and scored.
- * Target frames can retrieve the closest pose reference while a weighted fused
- * embedding supplies stable identity evidence for later swap/QC stages.
+ * Target frames can retrieve ranked pose references while a weighted fused
+ * embedding supplies stable identity evidence for swap QC.
  */
 class DefaultIdentityVault(private val context: Context) : IdentityVault {
     private var references: List<IdentityReference> = emptyList()
@@ -62,19 +62,22 @@ class DefaultIdentityVault(private val context: Context) : IdentityVault {
         yaw: Float,
         pitch: Float,
         expressionHint: String?,
-    ): IdentityReference? {
-        return references.maxByOrNull { reference ->
-            val yawFit = 1f - (abs(reference.yaw - yaw) / 90f).coerceIn(0f, 1f)
-            val pitchFit = 1f - (abs(reference.pitch - pitch) / 65f).coerceIn(0f, 1f)
-            val rollFit = 1f - (abs(reference.roll) / 50f).coerceIn(0f, 1f)
-            val poseFit = yawFit * 0.68f + pitchFit * 0.24f + rollFit * 0.08f
-            poseFit * 0.62f + reference.sharpness * 0.23f + reference.identityScore * 0.15f
-        }
-    }
+    ): IdentityReference? = rankedReferences(yaw, pitch).firstOrNull()
+
+    fun rankedReferences(yaw: Float, pitch: Float): List<IdentityReference> =
+        references.sortedByDescending { reference -> referenceFit(reference, yaw, pitch) }
 
     override fun fusedEmbedding(): FloatArray = fused.copyOf()
 
     fun allReferences(): List<IdentityReference> = references.toList()
+
+    private fun referenceFit(reference: IdentityReference, yaw: Float, pitch: Float): Float {
+        val yawFit = 1f - (abs(reference.yaw - yaw) / 90f).coerceIn(0f, 1f)
+        val pitchFit = 1f - (abs(reference.pitch - pitch) / 65f).coerceIn(0f, 1f)
+        val rollFit = 1f - (abs(reference.roll) / 50f).coerceIn(0f, 1f)
+        val poseFit = yawFit * 0.68f + pitchFit * 0.24f + rollFit * 0.08f
+        return poseFit * 0.62f + reference.sharpness * 0.23f + reference.identityScore * 0.15f
+    }
 
     private fun weightedFusion(items: List<IdentityReference>): FloatArray {
         val size = items.first().embedding.size
@@ -83,7 +86,6 @@ class DefaultIdentityVault(private val context: Context) : IdentityVault {
         var weightSum = 0.0
 
         for (item in items) {
-            // Clear/sharp images matter more, but every accepted angle still contributes.
             val frontalBonus = (1f - abs(item.yaw) / 90f).coerceIn(0f, 1f)
             val weight = (0.35f + item.sharpness * 0.45f + frontalBonus * 0.20f).toDouble()
             for (i in 0 until size) combined[i] += item.embedding[i] * weight
