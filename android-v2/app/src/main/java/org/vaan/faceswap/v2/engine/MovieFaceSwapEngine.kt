@@ -14,8 +14,8 @@ import java.util.concurrent.ConcurrentHashMap
  * v2 neural replacement path:
  * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
  * semantic + arbitrary occlusion gating -> spatial relighting -> micro-detail
- * restoration -> independent quality gate/alternate-reference rerender ->
- * expression-aware temporal stabilization -> composite.
+ * restoration -> target-camera sharpness match -> independent quality gate / 
+ * alternate-reference rerender -> expression-aware temporal stabilization -> composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -52,6 +52,7 @@ class MovieFaceSwapEngine(
         targetFace: TrackerManager.TrackedFace,
         allowRerender: Boolean = true,
         minimumQuality: Float = 0.78f,
+        enableCameraMatch: Boolean = true,
     ): SwapResult = withContext(Dispatchers.Default) {
         val pose = FacePoseQuality.estimatePose(targetFace)
         val rankedReferences = vault.rankedReferences(pose.yaw, pose.pitch)
@@ -97,6 +98,7 @@ class MovieFaceSwapEngine(
                 rawMask = rawMask,
                 visibleSkin = visibleSkin,
                 alphaMask = alphaMask,
+                enableCameraMatch = enableCameraMatch,
             )
             var rerendered = false
 
@@ -115,6 +117,7 @@ class MovieFaceSwapEngine(
                     rawMask = rawMask,
                     visibleSkin = visibleSkin,
                     alphaMask = alphaMask,
+                    enableCameraMatch = enableCameraMatch,
                 )
                 if (alternate.evaluation.quality.overall > chosen.evaluation.quality.overall) {
                     chosen.restored.recycle()
@@ -164,6 +167,7 @@ class MovieFaceSwapEngine(
         rawMask: ByteArray,
         visibleSkin: ByteArray,
         alphaMask: ByteArray,
+        enableCameraMatch: Boolean,
     ): Candidate {
         val generated = swapper.swapAligned(alignment.bitmap, convertedEmbedding(reference))
         val relit = try {
@@ -188,21 +192,34 @@ class MovieFaceSwapEngine(
             relit.recycle()
         }
 
-        val provisional = composite(targetFrame, restored, alphaMask, alignment)
+        val matched = if (enableCameraMatch) {
+            try {
+                CameraCharacterMatcher.match(
+                    generated = restored,
+                    target = alignment.bitmap,
+                    mask = rawMask,
+                    maxStrength = 0.42f,
+                )
+            } finally {
+                restored.recycle()
+            }
+        } else restored
+
+        val provisional = composite(targetFrame, matched, alphaMask, alignment)
         val evaluation = try {
             qualityEvaluator.evaluate(
                 composedFrame = provisional,
                 targetFace = targetFace,
                 reference = reference,
                 targetPose = pose,
-                alignedGenerated = restored,
+                alignedGenerated = matched,
                 alignedTarget = alignment.bitmap,
                 alpha = alphaMask,
             )
         } finally {
             provisional.recycle()
         }
-        return Candidate(reference, restored, evaluation)
+        return Candidate(reference, matched, evaluation)
     }
 
     private fun composite(
