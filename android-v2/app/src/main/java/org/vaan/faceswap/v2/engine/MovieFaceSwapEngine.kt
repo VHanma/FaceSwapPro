@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * v2 neural replacement path:
  * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
- * expression-aware temporal stabilization -> semantic composite.
+ * spatial relighting -> expression-aware temporal stabilization -> semantic composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -63,8 +63,16 @@ class MovieFaceSwapEngine(
             throw throwable
         }
 
+        // Parse the real target crop, not the generated face. This mask tells the
+        // relighter/compositor exactly where target skin/identity pixels live.
         val semantic = parser.parse(alignment.bitmap)
         val rawMask = semantic.identityCompositeMask()
+        val relit = SpatialRelighter.match(
+            generated = generated,
+            target = alignment.bitmap,
+            identityMask = rawMask,
+            strength = 0.82f,
+        )
         val alphaMask = MaskFeather.feather(
             mask = rawMask,
             width = semantic.width,
@@ -74,7 +82,7 @@ class MovieFaceSwapEngine(
         )
 
         val stabilized = temporal.stabilize(
-            current = generated,
+            current = relit,
             alpha = alphaMask,
             face = targetFace,
             pose = pose,
@@ -89,6 +97,7 @@ class MovieFaceSwapEngine(
 
         maskedGenerated.recycle()
         stabilized.bitmap.recycle()
+        relit.recycle()
         generated.recycle()
         alignment.bitmap.recycle()
 
