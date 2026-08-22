@@ -8,7 +8,7 @@
         android:allowBackup="true"
         android:label="FaceSwap Pro v2"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight.NoActionBar">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
             android:name=".MainActivity"
