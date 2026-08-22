@@ -38,6 +38,7 @@ class MovieVideoProcessor(private val context: Context) {
         val processedFrames: Int,
         val swappedFrames: Int,
         val durationUs: Long,
+        val sceneCuts: Int = 0,
     )
 
     private data class TrackInfo(
@@ -125,11 +126,13 @@ class MovieVideoProcessor(private val context: Context) {
 
         var processedFrames = 0
         var swappedFrames = 0
+        var sceneCuts = 0
         var decoderInputDone = false
         var decoderOutputDone = false
         var encoderOutputDone = false
         val decoderInfo = MediaCodec.BufferInfo()
         val encoderInfoBuffer = MediaCodec.BufferInfo()
+        val cutDetector = SceneCutDetector()
 
         try {
             decoder.start()
@@ -183,6 +186,15 @@ class MovieVideoProcessor(private val context: Context) {
 
                                     val upright = rotate(decoded, rotation)
                                     if (upright !== decoded) decoded.recycle()
+
+                                    // A hard edit must never inherit the previous shot's neural
+                                    // history. False positives are harmless: they only disable
+                                    // smoothing for a frame.
+                                    if (cutDetector.isCut(upright)) {
+                                        sceneCuts++
+                                        swapEngine.resetTemporal()
+                                    }
+
                                     val timestampMs = max(0L, decoderInfo.presentationTimeUs / 1000L)
                                     val faces = tracker.track(upright, timestampMs)
 
@@ -191,6 +203,9 @@ class MovieVideoProcessor(private val context: Context) {
                                         swappedFrames++
                                         swapped.bitmap
                                     } else {
+                                        // Tracking loss also breaks temporal continuity. When the
+                                        // face returns it starts clean instead of borrowing stale pixels.
+                                        swapEngine.resetTemporal()
                                         upright.copy(Bitmap.Config.ARGB_8888, false)
                                     }
 
@@ -224,7 +239,7 @@ class MovieVideoProcessor(private val context: Context) {
                                     val percent = ((decoderInfo.presentationTimeUs * 94L) / durationUs)
                                         .toInt().coerceIn(1, 94)
                                     progress(
-                                        "Movie neural frame $processedFrames • swapped $swappedFrames",
+                                        "Movie neural frame $processedFrames • swapped $swappedFrames • cuts $sceneCuts",
                                         percent,
                                     )
                                 }
@@ -282,7 +297,7 @@ class MovieVideoProcessor(private val context: Context) {
             tempOutput.delete()
         }
         progress("FaceSwap Pro v2 Movie master complete", 100)
-        Result(savedUri, processedFrames, swappedFrames, durationUs)
+        Result(savedUri, processedFrames, swappedFrames, durationUs, sceneCuts)
     }
 
     private fun queueEncoderFrame(
