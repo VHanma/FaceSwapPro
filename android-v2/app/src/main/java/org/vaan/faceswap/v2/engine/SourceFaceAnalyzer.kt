@@ -35,8 +35,20 @@ class SourceFaceAnalyzer(
         val image = BitmapImageBuilder(bitmap).build()
         val result = landmarker.detect(image)
         val face = result.faceLandmarks().firstOrNull() ?: return null
+        val blendshapes = result.faceBlendshapes().orElse(emptyList())
+            .firstOrNull()
+            ?.associate { category -> category.categoryName() to category.score() }
+            ?: emptyMap()
+        val transform = result.facialTransformationMatrixes().orElse(emptyList())
+            .firstOrNull()
+            ?.copyOf()
+            ?: floatArrayOf()
+
         return TrackerManager.TrackedFace(
-            face.map { point -> TrackerManager.Point3(point.x(), point.y(), point.z()) }
+            landmarks = face.map { point -> TrackerManager.Point3(point.x(), point.y(), point.z()) },
+            blendshapes = blendshapes,
+            transformationMatrix = transform,
+            timestampMs = 0L,
         )
     }
 
