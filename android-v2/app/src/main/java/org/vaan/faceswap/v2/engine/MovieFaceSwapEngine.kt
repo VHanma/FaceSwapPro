@@ -11,8 +11,9 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * First real v2 neural replacement path:
- * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 -> semantic composite.
+ * v2 neural replacement path:
+ * pose-aware source selection -> ArcFace -> CrossFace -> SimSwap512 ->
+ * expression-aware temporal stabilization -> semantic composite.
  */
 class MovieFaceSwapEngine(
     private val context: Context,
@@ -31,6 +32,7 @@ class MovieFaceSwapEngine(
     private val swapper = SimSwap512Engine(pack.file("simswap_unofficial_512.onnx"))
     private val parser = SemanticFaceParser(context)
     private val sourceAnalyzer = SourceFaceAnalyzer(context)
+    private val temporal = AlignedTemporalStabilizer()
     private val convertedEmbeddingCache = ConcurrentHashMap<String, FloatArray>()
 
     suspend fun swapFrame(
@@ -71,7 +73,13 @@ class MovieFaceSwapEngine(
             passes = 2,
         )
 
-        val maskedGenerated = applyAlpha(generated, alphaMask)
+        val stabilized = temporal.stabilize(
+            current = generated,
+            alpha = alphaMask,
+            face = targetFace,
+            pose = pose,
+        )
+        val maskedGenerated = applyAlpha(stabilized.bitmap, stabilized.alpha)
         val output = targetFrame.copy(Bitmap.Config.ARGB_8888, true)
         Canvas(output).drawBitmap(
             maskedGenerated,
@@ -80,11 +88,15 @@ class MovieFaceSwapEngine(
         )
 
         maskedGenerated.recycle()
+        stabilized.bitmap.recycle()
         generated.recycle()
         alignment.bitmap.recycle()
 
         SwapResult(output, reference, pose)
     }
+
+    /** Reset temporal history after scene cuts, tracking loss or subject changes. */
+    fun resetTemporal() = temporal.reset()
 
     private fun convertedEmbedding(reference: IdentityReference): FloatArray {
         val key = reference.uri.toString()
@@ -140,6 +152,7 @@ class MovieFaceSwapEngine(
     }
 
     override fun close() {
+        temporal.close()
         sourceAnalyzer.close()
         parser.close()
         swapper.close()
