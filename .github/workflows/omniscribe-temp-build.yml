@@ -9,12 +9,12 @@ permissions:
   issues: write
 
 env:
-  BUILD_ISSUE_TITLE: '[CI] Build OmniScribe v1.1 arm64'
-  RELEASE_TAG: omniscribe-v1.1-ci
+  BUILD_ISSUE_TITLE: '[CI] Build OmniScribe v1.1.1 arm64'
+  RELEASE_TAG: omniscribe-v1.1.1-ci
 
 jobs:
   build:
-    if: github.event.issue.title == '[CI] Build OmniScribe v1.1 arm64'
+    if: github.event.issue.title == '[CI] Build OmniScribe v1.1.1 arm64'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -23,7 +23,7 @@ jobs:
         with:
           ref: build/omniscribe-v1.1
 
-      - name: Reconstruct OmniScribe source
+      - name: Reconstruct OmniScribe source and apply fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -34,10 +34,11 @@ jobs:
           unzip -q /tmp/omniscribe.zip -d omniscribe || true
           cp ci/WhisperEngine.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
           cp ci/TranscriptExporter.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/TranscriptExporter.java
+          cp ci/app-build.gradle omniscribe/app/build.gradle
           test -f omniscribe/app/build.gradle
           test -f omniscribe/scripts/fetch-whisper.sh
-          test -s omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
-          test -s omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/TranscriptExporter.java
+          grep -q "ANDROID_STL=c++_shared" omniscribe/app/build.gradle
+          grep -q "versionName '1.1.1'" omniscribe/app/build.gradle
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -70,23 +71,28 @@ jobs:
         shell: bash
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify and name APK
+      - name: Verify FFmpeg runtime fix and name APK
         shell: bash
         run: |
           set -euo pipefail
           APK="omniscribe/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          cp "$APK" OmniScribe-v1.1-arm64.apk
-          sha256sum OmniScribe-v1.1-arm64.apk | tee OmniScribe-v1.1-arm64.apk.sha256
-          unzip -t OmniScribe-v1.1-arm64.apk
+          unzip -t "$APK"
+          echo "Checking required ARM64 native libraries..."
+          unzip -l "$APK" | tee /tmp/apk-files.txt
+          grep -q 'lib/arm64-v8a/libffmpeg.so' /tmp/apk-files.txt
+          grep -q 'lib/arm64-v8a/libomniscribe_whisper.so' /tmp/apk-files.txt
+          grep -q 'lib/arm64-v8a/libc++_shared.so' /tmp/apk-files.txt
+          cp "$APK" OmniScribe-v1.1.1-arm64.apk
+          sha256sum OmniScribe-v1.1.1-arm64.apk | tee OmniScribe-v1.1.1-arm64.apk.sha256
 
       - name: Upload OmniScribe Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OmniScribe-v1.1-arm64
+          name: OmniScribe-v1.1.1-arm64
           path: |
-            OmniScribe-v1.1-arm64.apk
-            OmniScribe-v1.1-arm64.apk.sha256
+            OmniScribe-v1.1.1-arm64.apk
+            OmniScribe-v1.1.1-arm64.apk.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -97,10 +103,10 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" OmniScribe-v1.1-arm64.apk OmniScribe-v1.1-arm64.apk.sha256 --clobber
-            gh release edit "$RELEASE_TAG" --title 'OmniScribe v1.1 ARM64 APK' --notes 'Temporary CI release for the OmniScribe Android APK build.'
+            gh release upload "$RELEASE_TAG" OmniScribe-v1.1.1-arm64.apk OmniScribe-v1.1.1-arm64.apk.sha256 --clobber
+            gh release edit "$RELEASE_TAG" --title 'OmniScribe v1.1.1 ARM64 APK' --notes 'Fixes FFmpeg startup on Android by packaging libc++_shared.so required by librubberband.'
           else
-            gh release create "$RELEASE_TAG" OmniScribe-v1.1-arm64.apk OmniScribe-v1.1-arm64.apk.sha256 --title 'OmniScribe v1.1 ARM64 APK' --notes 'Temporary CI release for the OmniScribe Android APK build.'
+            gh release create "$RELEASE_TAG" OmniScribe-v1.1.1-arm64.apk OmniScribe-v1.1.1-arm64.apk.sha256 --title 'OmniScribe v1.1.1 ARM64 APK' --notes 'Fixes FFmpeg startup on Android by packaging libc++_shared.so required by librubberband.'
           fi
 
       - name: Report success
@@ -109,8 +115,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          SHA="$(cat OmniScribe-v1.1-arm64.apk.sha256)"
-          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA"
+          SHA="$(cat OmniScribe-v1.1.1-arm64.apk.sha256)"
+          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA native_runtime=libc++_shared.so_verified"
 
       - name: Report failure
         if: failure()
