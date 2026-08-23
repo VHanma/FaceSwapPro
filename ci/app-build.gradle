@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.vaanhanma.omniscribe'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.vaanhanma.omniscribe'
+        minSdk 26
+        targetSdk 36
+        versionCode 3
+        versionName '1.1.1'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // IMPORTANT: youtubedl-android's ffmpeg package contains native components
+                // such as librubberband.so that require libc++_shared.so at runtime.
+                // Using c++_shared for OmniScribe's JNI target makes AGP package the
+                // matching NDK C++ runtime into lib/arm64-v8a/ for Android's linker.
+                arguments '-DANDROID_STL=c++_shared', '-DWHISPER_ROOT=' + file('../third_party/whisper.cpp').absolutePath
+                cppFlags '-O3 -std=c++17'
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    ndkVersion '28.2.13676358'
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            // If another transitive native dependency also supplies this runtime,
+            // keep one ABI-matched copy instead of failing packaging.
+            pickFirsts += ['lib/arm64-v8a/libc++_shared.so']
+        }
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}', '/META-INF/LICENSE*', '/META-INF/NOTICE*']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
+    implementation 'com.google.android.material:material:1.12.0'
+
+    def ytdl = '0.18.1'
+    implementation "io.github.junkfood02.youtubedl-android:library:$ytdl"
+    implementation "io.github.junkfood02.youtubedl-android:ffmpeg:$ytdl"
+}
