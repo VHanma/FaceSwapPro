@@ -10,8 +10,8 @@ android {
         applicationId 'com.vaanhanma.omniscribe'
         minSdk 26
         targetSdk 36
-        versionCode 3
-        versionName '1.1.1'
+        versionCode 4
+        versionName '1.2.0'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -19,10 +19,6 @@ android {
 
         externalNativeBuild {
             cmake {
-                // IMPORTANT: youtubedl-android's ffmpeg package contains native components
-                // such as librubberband.so that require libc++_shared.so at runtime.
-                // Using c++_shared for OmniScribe's JNI target makes AGP package the
-                // matching NDK C++ runtime into lib/arm64-v8a/ for Android's linker.
                 arguments '-DANDROID_STL=c++_shared', '-DWHISPER_ROOT=' + file('../third_party/whisper.cpp').absolutePath
                 cppFlags '-O3 -std=c++17'
             }
@@ -57,8 +53,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // If another transitive native dependency also supplies this runtime,
-            // keep one ABI-matched copy instead of failing packaging.
             pickFirsts += ['lib/arm64-v8a/libc++_shared.so']
         }
         resources {
