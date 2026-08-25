@@ -14,9 +14,10 @@ permissions:
   contents: write
 
 env:
-  APK_FILE: UltimateVideoStudio-v2.0.0-arm64.apk
+  APK_FILE: UltimateVideoStudio-v2.1.0-arm64.apk
+  SOURCE_FILE: UltimateVideoStudio-v2.1-source.zip
   PREVIEW_TAG: ultimate-video-studio-v2-preview
-  PREVIEW_NAME: Ultimate Video Studio v2 Preview
+  PREVIEW_NAME: Ultimate Video Studio v2.1 Preview
 
 concurrency:
   group: ultimate-video-studio-${{ github.workflow }}-${{ github.ref }}
@@ -80,19 +81,41 @@ jobs:
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
 
-      - name: Validate editor source
+      - name: Validate v2.1 editor source
         run: |
           python -m py_compile main.py editor_engine.py faceswap_engine.py faceswap/__init__.py
           grep -q 'class UltimateVideoStudioApp' main.py
           grep -q 'def render_project' editor_engine.py
           grep -q 'def face_swap_frame' editor_engine.py
           grep -q 'def auto_cutout_background' editor_engine.py
+          grep -q 'class Keyframe' editor_engine.py
+          grep -q 'class OverlayTrack' editor_engine.py
+          grep -q 'def render_overlay_tracks' editor_engine.py
+          grep -q 'calcOpticalFlowFarneback' editor_engine.py
+          grep -q '_build_timeline_tab' main.py
+          grep -q 'cutout_temporal' main.py
+          grep -q '^version = 2.1.0' buildozer.spec
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
           grep -q 'p4a.branch = v2026.05.09' buildozer.spec
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q '"libx264"' faceswap_engine.py
+
+      - name: Smoke-test keyframe engine
+        run: |
+          python - <<'PY'
+          from editor_engine import Keyframe, OverlayTrack, _track_state
+          track = OverlayTrack(kind='text', keyframes=[
+              Keyframe(time=0.0, x=0.1, scale=0.1, opacity=1.0, rotation=0.0),
+              Keyframe(time=2.0, x=0.9, scale=0.3, opacity=0.5, rotation=90.0),
+          ])
+          state = _track_state(track, 1.0)
+          assert 0.45 <= state.x <= 0.55, state
+          assert 0.18 <= state.scale <= 0.22, state
+          assert 40.0 <= state.rotation <= 50.0, state
+          print('v2.1 keyframe smoke test OK:', state)
+          PY
 
       - name: Build debug APK
         env:
@@ -109,16 +132,16 @@ jobs:
           cp "$APK" "$APK_FILE"
           ls -lh "$APK_FILE"
           sha256sum "$APK_FILE" | tee APK_SHA256.txt
-          zip -9 UltimateVideoStudio-v2-source.zip main.py editor_engine.py buildozer.spec
+          zip -9 "$SOURCE_FILE" main.py editor_engine.py buildozer.spec
 
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UltimateVideoStudio-v2.0.0-arm64
+          name: UltimateVideoStudio-v2.1.0-arm64
           path: |
             ${{ env.APK_FILE }}
             APK_SHA256.txt
-            UltimateVideoStudio-v2-source.zip
+            ${{ env.SOURCE_FILE }}
           if-no-files-found: error
           retention-days: 30
 
@@ -127,12 +150,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='Ultimate Video Studio v2 preview: full Android editor foundation with trim/speed/reverse, smooth slow motion, stabilization, frame-by-frame overrides, expression-aware face swapping, color/effects, text, custom stickers, background replacement, audio processing, and configurable H.264/H.265 export.'
+          NOTES='Ultimate Video Studio v2.1 preview adds unlimited sticker/text timeline tracks, per-track keyframes for position/scale/opacity/rotation with easing curves, exact-time timeline preview, and Smart Cutout v2 using optical-flow-warped temporal masks to reduce edge flicker. It retains frame-by-frame overrides, expression-aware face swapping, smooth slow motion, stabilization, effects, audio tools, and configurable H.264/H.265 export.'
           if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
-            gh release upload "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt UltimateVideoStudio-v2-source.zip --clobber
+            gh release upload "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt "$SOURCE_FILE" --clobber
             gh release edit "$PREVIEW_TAG" --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease
           else
-            gh release create "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt UltimateVideoStudio-v2-source.zip \
+            gh release create "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt "$SOURCE_FILE" \
               --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease \
               --target "${GITHUB_SHA}"
           fi
