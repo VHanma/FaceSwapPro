@@ -14,10 +14,10 @@ permissions:
   contents: write
 
 env:
-  APK_FILE: UltimateVideoStudio-v2.1.0-arm64.apk
-  SOURCE_FILE: UltimateVideoStudio-v2.1-source.zip
+  APK_FILE: UltimateVideoStudio-v2.2.0-arm64.apk
+  SOURCE_FILE: UltimateVideoStudio-v2.2-source.zip
   PREVIEW_TAG: ultimate-video-studio-v2-preview
-  PREVIEW_NAME: Ultimate Video Studio v2.1 Preview
+  PREVIEW_NAME: Ultimate Video Studio v2.2 Preview
 
 concurrency:
   group: ultimate-video-studio-${{ github.workflow }}-${{ github.ref }}
@@ -33,14 +33,15 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Expand Ultimate Video Studio source payload
+      - name: Expand Ultimate Video Studio v2.2 source
         run: |
-          cat uvs_payload.part* > /tmp/uvs_payload.b64
+          cat v22_payload.part0 v22_payload.part1 v22_payload.rest > /tmp/uvs_payload.b64
           test -s /tmp/uvs_payload.b64
           base64 -d /tmp/uvs_payload.b64 > /tmp/uvs_payload.zip
           unzip -o /tmp/uvs_payload.zip -d .
           test -s main.py
           test -s editor_engine.py
+          test -s face_temporal.py
           test -s buildozer.spec
 
       - name: Set up Java 17
@@ -85,20 +86,27 @@ jobs:
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
 
-      - name: Validate v2.1 editor source
+      - name: Rival gate - validate v2.2 source
         run: |
-          python -m py_compile main.py editor_engine.py faceswap_engine.py faceswap/__init__.py
+          python -m py_compile main.py editor_engine.py face_temporal.py faceswap_engine.py faceswap/__init__.py
           grep -q 'class UltimateVideoStudioApp' main.py
           grep -q 'def render_project' editor_engine.py
-          grep -q 'def face_swap_frame' editor_engine.py
-          grep -q 'def auto_cutout_background' editor_engine.py
           grep -q 'class Keyframe' editor_engine.py
           grep -q 'class OverlayTrack' editor_engine.py
           grep -q 'def render_overlay_tracks' editor_engine.py
-          grep -q 'calcOpticalFlowFarneback' editor_engine.py
-          grep -q '_build_timeline_tab' main.py
-          grep -q 'cutout_temporal' main.py
-          grep -q '^version = 2.1.0' buildozer.spec
+          grep -q 'def generate_motion_track' editor_engine.py
+          grep -q 'calcOpticalFlowPyrLK' editor_engine.py
+          grep -q 'back_pts' editor_engine.py
+          grep -q 'estimateAffinePartial2D' editor_engine.py
+          grep -q 'blend_mode' editor_engine.py
+          grep -q 'def _blend_rgba' editor_engine.py
+          grep -q 'AUTO TRACK SELECTED LAYER' main.py
+          grep -q 'Face temporal quality' main.py
+          grep -q 'face_quality' editor_engine.py
+          grep -q 'class TemporalFaceSwapper' face_temporal.py
+          grep -q 'estimateAffinePartial2D' face_temporal.py
+          grep -q '_target_lab_mean' face_temporal.py
+          grep -q '^version = 2.2.0' buildozer.spec
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
@@ -106,11 +114,13 @@ jobs:
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q '"libx264"' faceswap_engine.py
 
-      - name: Smoke-test keyframe engine
+      - name: Rival gate - keyframes and blend compositor
         run: |
           python - <<'PY'
-          from editor_engine import Keyframe, OverlayTrack, _track_state
-          track = OverlayTrack(kind='text', keyframes=[
+          import numpy as np
+          from editor_engine import Keyframe, OverlayTrack, _blend_rgba, _track_state
+
+          track = OverlayTrack(kind='text', blend_mode='Screen', keyframes=[
               Keyframe(time=0.0, x=0.1, scale=0.1, opacity=1.0, rotation=0.0),
               Keyframe(time=2.0, x=0.9, scale=0.3, opacity=0.5, rotation=90.0),
           ])
@@ -119,7 +129,36 @@ jobs:
           assert 0.18 <= state['scale'] <= 0.22, state
           assert 0.70 <= state['opacity'] <= 0.80, state
           assert 40.0 <= state['rotation'] <= 50.0, state
-          print('v2.1 keyframe smoke test OK:', state)
+
+          dst = np.full((32, 32, 3), 60, np.uint8)
+          src = np.zeros((12, 12, 4), np.uint8)
+          src[:, :, :3] = 180
+          src[:, :, 3] = 255
+          before = dst.copy()
+          _blend_rgba(dst, src, 10, 10, 0.8, 'Screen')
+          assert np.mean(dst[10:22, 10:22]) > np.mean(before[10:22, 10:22])
+          print('v2.2 keyframe + blend gate OK:', state)
+          PY
+
+      - name: Rival gate - Cinema face temporal stability
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from face_temporal import TemporalFaceSwapper
+
+          t = np.linspace(0.0, 1.0, 45, dtype=np.float32)
+          base = np.column_stack((80.0 + 150.0*t, 120.0 + 35.0*np.sin(t*5.0))).astype(np.float32)
+          swapper = TemporalFaceSwapper(detection_width=640, quality='Cinema')
+          first = swapper._smooth_target_points(base, (55, 55, 220, 250))
+          measured = base + np.array([4.0, 3.0], dtype=np.float32)
+          measured[5] += np.array([120.0, -80.0], dtype=np.float32)
+          measured[40] += np.array([0.0, 18.0], dtype=np.float32)
+          second = swapper._smooth_target_points(measured, (59, 58, 220, 250))
+          rejected = float(np.linalg.norm(second[5] - measured[5]))
+          expression = float(second[40, 1] - first[40, 1])
+          assert rejected > 45.0, rejected
+          assert expression > 5.0, expression
+          print('Cinema temporal gate OK: rejected=', rejected, 'expression=', expression)
           PY
 
       - name: Build debug APK
@@ -137,12 +176,12 @@ jobs:
           cp "$APK" "$APK_FILE"
           ls -lh "$APK_FILE"
           sha256sum "$APK_FILE" | tee APK_SHA256.txt
-          zip -9 "$SOURCE_FILE" main.py editor_engine.py buildozer.spec
+          zip -9 "$SOURCE_FILE" main.py editor_engine.py face_temporal.py buildozer.spec
 
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UltimateVideoStudio-v2.1.0-arm64
+          name: UltimateVideoStudio-v2.2.0-arm64
           path: |
             ${{ env.APK_FILE }}
             APK_SHA256.txt
@@ -155,7 +194,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='Ultimate Video Studio v2.1 preview adds unlimited sticker/text timeline tracks, per-track keyframes for position/scale/opacity/rotation with easing curves, exact-time timeline preview, and Smart Cutout v2 using optical-flow-warped temporal masks to reduce edge flicker. It retains frame-by-frame overrides, expression-aware face swapping, smooth slow motion, stabilization, effects, audio tools, and configurable H.264/H.265 export.'
+          NOTES='Ultimate Video Studio v2.2 adds editable automatic object tracking with translation, scale and rotation keyframes, optional every-source-frame tracking, forward/backward optical-flow rejection, nine layer blend modes, correctly rotated text layers, Full Source face processing by default, and Cinema face mode with motion-aware RANSAC landmark stabilization plus temporal LAB skin/light matching. It keeps the v2.1 multitrack overlay timeline, Smart Cutout v2, exact frame overrides, smooth slow motion, stabilization, audio tools and configurable export.'
           if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
             gh release upload "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt "$SOURCE_FILE" --clobber
             gh release edit "$PREVIEW_TAG" --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease
