@@ -115,9 +115,10 @@ jobs:
               Keyframe(time=2.0, x=0.9, scale=0.3, opacity=0.5, rotation=90.0),
           ])
           state = _track_state(track, 1.0)
-          assert 0.45 <= state.x <= 0.55, state
-          assert 0.18 <= state.scale <= 0.22, state
-          assert 40.0 <= state.rotation <= 50.0, state
+          assert 0.45 <= state['x'] <= 0.55, state
+          assert 0.18 <= state['scale'] <= 0.22, state
+          assert 0.70 <= state['opacity'] <= 0.80, state
+          assert 40.0 <= state['rotation'] <= 50.0, state
           print('v2.1 keyframe smoke test OK:', state)
           PY
 
