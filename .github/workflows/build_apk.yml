@@ -1,40 +1,46 @@
-name: Build and publish FaceSwap Pro APK
+name: Build Ultimate Video Studio APK
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
-      - main
-      - install-ready
-      - apk-build
       - 'fix/**'
+      - 'ultimate/**'
   pull_request:
     branches:
       - master
-  schedule:
-    - cron: '*/15 * * * *'
 
 permissions:
   contents: write
 
 env:
-  APK_RELEASE_TAG: faceswappro-latest
-  APK_RELEASE_NAME: FaceSwap Pro Latest APK
+  APK_FILE: UltimateVideoStudio-v2.0.0-arm64.apk
+  PREVIEW_TAG: ultimate-video-studio-v2-preview
+  PREVIEW_NAME: Ultimate Video Studio v2 Preview
 
 concurrency:
-  group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
+  group: ultimate-video-studio-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Compile ARM64 Android APK
+    name: Compile Ultimate Video Studio ARM64 APK
     runs-on: ubuntu-22.04
     timeout-minutes: 300
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Expand Ultimate Video Studio source payload
+        run: |
+          cat uvs_payload.part* > /tmp/uvs_payload.b64
+          test -s /tmp/uvs_payload.b64
+          base64 -d /tmp/uvs_payload.b64 > /tmp/uvs_payload.zip
+          unzip -o /tmp/uvs_payload.zip -d .
+          test -s main.py
+          test -s editor_engine.py
+          test -s buildozer.spec
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -69,22 +75,23 @@ jobs:
             --output assets/haarcascade_frontalface_alt2.xml
           test -s assets/haarcascade_frontalface_alt2.xml
 
-      - name: Prepare collision-free packaged engine
+      - name: Prepare collision-free face engine
         run: |
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
 
-      - name: Validate repaired source
+      - name: Validate editor source
         run: |
-          python -m py_compile main.py faceswap_engine.py faceswap/__init__.py
-          grep -q 'def process_video' faceswap_engine.py
-          grep -q 'from faceswap_engine import' faceswap/__init__.py
-          grep -q 'libffmpegbin.so' faceswap/__init__.py
-          grep -q 'TemporaryFile' faceswap/__init__.py
+          python -m py_compile main.py editor_engine.py faceswap_engine.py faceswap/__init__.py
+          grep -q 'class UltimateVideoStudioApp' main.py
+          grep -q 'def render_project' editor_engine.py
+          grep -q 'def face_swap_frame' editor_engine.py
+          grep -q 'def auto_cutout_background' editor_engine.py
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
-          grep -q 'p4a.branch = v2026.05.09' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
+          grep -q 'p4a.branch = v2026.05.09' buildozer.spec
+          grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q '"libx264"' faceswap_engine.py
 
       - name: Build debug APK
@@ -99,37 +106,33 @@ jobs:
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'libffmpegbin.so'
-          cp "$APK" FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          ls -lh FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          sha256sum FaceSwapPro-v1.3.2-expression-aware-arm64.apk | tee APK_SHA256.txt
+          cp "$APK" "$APK_FILE"
+          ls -lh "$APK_FILE"
+          sha256sum "$APK_FILE" | tee APK_SHA256.txt
+          zip -9 UltimateVideoStudio-v2-source.zip main.py editor_engine.py buildozer.spec
 
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v1.3.2-expression-aware-arm64
+          name: UltimateVideoStudio-v2.0.0-arm64
           path: |
-            FaceSwapPro-v1.3.2-expression-aware-arm64.apk
+            ${{ env.APK_FILE }}
             APK_SHA256.txt
+            UltimateVideoStudio-v2-source.zip
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish public latest APK release
-        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+      - name: Publish branch preview APK release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
-              --clobber
-            gh release edit "$APK_RELEASE_TAG" \
-              --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
-              --latest
+          NOTES='Ultimate Video Studio v2 preview: full Android editor foundation with trim/speed/reverse, smooth slow motion, stabilization, frame-by-frame overrides, expression-aware face swapping, color/effects, text, custom stickers, background replacement, audio processing, and configurable H.264/H.265 export.'
+          if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
+            gh release upload "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt UltimateVideoStudio-v2-source.zip --clobber
+            gh release edit "$PREVIEW_TAG" --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease
           else
-            gh release create "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
-              --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
-              --latest
+            gh release create "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt UltimateVideoStudio-v2-source.zip \
+              --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease \
+              --target "${GITHUB_SHA}"
           fi
