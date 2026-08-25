@@ -33,11 +33,16 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Expand Ultimate Video Studio v2.2 source
+      - name: Expand checksummed Ultimate Video Studio v2.2 source
         run: |
-          cat v22_payload.part0 v22_payload.part1 v22_payload.rest > /tmp/uvs_payload.b64
-          test -s /tmp/uvs_payload.b64
+          cat \
+            v22_payload.part0 v22_payload.part1 \
+            v22_payload.part2x0 v22_payload.part2x1 \
+            v22_payload.part3x0 v22_payload.part3x1 \
+            v22_payload.part4 > /tmp/uvs_payload.b64
+          echo 'cee0f02949e2f9458aecc7bbb5e0d659227be92c37e4398e5a94ab9b05959786  /tmp/uvs_payload.b64' | sha256sum -c -
           base64 -d /tmp/uvs_payload.b64 > /tmp/uvs_payload.zip
+          echo 'cf71aa4c22efe0c8365ffce563286bcd3f3600c28af197d571a0e37418d28f02  /tmp/uvs_payload.zip' | sha256sum -c -
           unzip -o /tmp/uvs_payload.zip -d .
           test -s main.py
           test -s editor_engine.py
@@ -119,7 +124,6 @@ jobs:
           python - <<'PY'
           import numpy as np
           from editor_engine import Keyframe, OverlayTrack, _blend_rgba, _track_state
-
           track = OverlayTrack(kind='text', blend_mode='Screen', keyframes=[
               Keyframe(time=0.0, x=0.1, scale=0.1, opacity=1.0, rotation=0.0),
               Keyframe(time=2.0, x=0.9, scale=0.3, opacity=0.5, rotation=90.0),
@@ -129,7 +133,6 @@ jobs:
           assert 0.18 <= state['scale'] <= 0.22, state
           assert 0.70 <= state['opacity'] <= 0.80, state
           assert 40.0 <= state['rotation'] <= 50.0, state
-
           dst = np.full((32, 32, 3), 60, np.uint8)
           src = np.zeros((12, 12, 4), np.uint8)
           src[:, :, :3] = 180
@@ -145,7 +148,6 @@ jobs:
           python - <<'PY'
           import numpy as np
           from face_temporal import TemporalFaceSwapper
-
           t = np.linspace(0.0, 1.0, 45, dtype=np.float32)
           base = np.column_stack((80.0 + 150.0*t, 120.0 + 35.0*np.sin(t*5.0))).astype(np.float32)
           swapper = TemporalFaceSwapper(detection_width=640, quality='Cinema')
