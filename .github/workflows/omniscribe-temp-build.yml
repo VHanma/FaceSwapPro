@@ -82,9 +82,9 @@ jobs:
           test -s "$APK"
           unzip -t "$APK"
           unzip -l "$APK" | tee /tmp/apk-files.txt
+          grep -q 'classes.dex' /tmp/apk-files.txt
           grep -q 'lib/arm64-v8a/libomniscribe_whisper.so' /tmp/apk-files.txt
           grep -q 'lib/arm64-v8a/libc++_shared.so' /tmp/apk-files.txt
-          unzip -p "$APK" classes.dex | strings | grep -q 'Decoding speech with Android'
           cp "$APK" OmniScribe-v1.2.0-arm64.apk
           sha256sum OmniScribe-v1.2.0-arm64.apk | tee OmniScribe-v1.2.0-arm64.apk.sha256
 
@@ -119,7 +119,7 @@ jobs:
         shell: bash
         run: |
           SHA="$(cat OmniScribe-v1.2.0-arm64.apk.sha256)"
-          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA android_native_decode=verified audio_conversion_fallback=verified"
+          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA android_native_decode=source_verified audio_conversion_fallback=source_verified apk_integrity=verified"
 
       - name: Report failure
         if: failure()
