@@ -71,11 +71,15 @@ jobs:
       - name: Install Buildozer and host test dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install 'buildozer==1.6.0' numpy opencv-python-headless
+          python -m pip install 'buildozer==1.6.0' 'numpy<2.3' 'opencv-python-headless==4.12.0.88'
           buildozer --version
           python - <<'PY'
           import cv2, numpy
           print('Host OpenCV', cv2.__version__, 'NumPy', numpy.__version__)
+          assert cv2.__version__.startswith('4.12.'), cv2.__version__
+          assert hasattr(cv2, 'CascadeClassifier'), 'Host OpenCV lacks CascadeClassifier'
+          assert hasattr(cv2, 'calcOpticalFlowPyrLK'), 'Host OpenCV lacks LK optical flow'
+          assert hasattr(cv2, 'estimateAffinePartial2D'), 'Host OpenCV lacks affine estimator'
           PY
 
       - name: Bundle OpenCV face detector
