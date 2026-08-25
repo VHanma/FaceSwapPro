@@ -9,12 +9,12 @@ permissions:
   issues: write
 
 env:
-  BUILD_ISSUE_TITLE: '[CI] Build OmniScribe v1.1.1 arm64'
-  RELEASE_TAG: omniscribe-v1.1.1-ci
+  BUILD_ISSUE_TITLE: '[CI] Build OmniScribe v1.2.0 arm64'
+  RELEASE_TAG: omniscribe-v1.2.0-ci
 
 jobs:
   build:
-    if: github.event.issue.title == '[CI] Build OmniScribe v1.1.1 arm64'
+    if: github.event.issue.title == '[CI] Build OmniScribe v1.2.0 arm64'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -23,7 +23,7 @@ jobs:
         with:
           ref: build/omniscribe-v1.1
 
-      - name: Reconstruct OmniScribe source and apply fixes
+      - name: Reconstruct OmniScribe v1.2 source
         shell: bash
         run: |
           set -euo pipefail
@@ -35,13 +35,13 @@ jobs:
           cp ci/WhisperEngine.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/WhisperEngine.java
           cp ci/TranscriptExporter.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/TranscriptExporter.java
           cp ci/FfmpegRunner.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/FfmpegRunner.java
+          cp ci/AndroidAudioDecoder.java omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/AndroidAudioDecoder.java
           cp ci/app-build.gradle omniscribe/app/build.gradle
-          test -f omniscribe/app/build.gradle
-          test -f omniscribe/scripts/fetch-whisper.sh
-          grep -q "ANDROID_STL=c++_shared" omniscribe/app/build.gradle
-          grep -q "versionName '1.1.1'" omniscribe/app/build.gradle
-          grep -q 'python/usr/lib' omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/FfmpegRunner.java
-          grep -q 'ensureFfmpegCppRuntime' omniscribe/app/src/main/java/com/vaanhanma/omniscribe/engine/FfmpegRunner.java
+          python3 ci/patch-v12.py
+          grep -q "versionName '1.2.0'" omniscribe/app/build.gradle
+          grep -q 'AndroidAudioDecoder' omniscribe/app/src/main/java/com/vaanhanma/omniscribe/service/BatchService.java
+          grep -q 'Decoding speech with Android' omniscribe/app/src/main/java/com/vaanhanma/omniscribe/service/BatchService.java
+          grep -q 'keeping original audio' omniscribe/app/src/main/java/com/vaanhanma/omniscribe/service/BatchService.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -74,28 +74,27 @@ jobs:
         shell: bash
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify FFmpeg runtime fix and name APK
+      - name: Verify v1.2 architecture and APK
         shell: bash
         run: |
           set -euo pipefail
           APK="omniscribe/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           unzip -t "$APK"
-          echo "Checking required ARM64 native libraries..."
           unzip -l "$APK" | tee /tmp/apk-files.txt
-          grep -q 'lib/arm64-v8a/libffmpeg.so' /tmp/apk-files.txt
           grep -q 'lib/arm64-v8a/libomniscribe_whisper.so' /tmp/apk-files.txt
           grep -q 'lib/arm64-v8a/libc++_shared.so' /tmp/apk-files.txt
-          cp "$APK" OmniScribe-v1.1.1-arm64.apk
-          sha256sum OmniScribe-v1.1.1-arm64.apk | tee OmniScribe-v1.1.1-arm64.apk.sha256
+          unzip -p "$APK" classes.dex | strings | grep -q 'Decoding speech with Android'
+          cp "$APK" OmniScribe-v1.2.0-arm64.apk
+          sha256sum OmniScribe-v1.2.0-arm64.apk | tee OmniScribe-v1.2.0-arm64.apk.sha256
 
       - name: Upload OmniScribe Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OmniScribe-v1.1.1-arm64
+          name: OmniScribe-v1.2.0-arm64
           path: |
-            OmniScribe-v1.1.1-arm64.apk
-            OmniScribe-v1.1.1-arm64.apk.sha256
+            OmniScribe-v1.2.0-arm64.apk
+            OmniScribe-v1.2.0-arm64.apk.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -105,11 +104,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          NOTES='v1.2 moves transcription decoding to Android MediaExtractor/MediaCodec first, so transcript jobs no longer depend on the external FFmpeg executable. FFmpeg remains an optional conversion helper; if conversion fails, OmniScribe keeps the original downloaded audio instead of killing the whole job.'
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" OmniScribe-v1.1.1-arm64.apk OmniScribe-v1.1.1-arm64.apk.sha256 --clobber
-            gh release edit "$RELEASE_TAG" --title 'OmniScribe v1.1.1 ARM64 APK' --notes 'Fixes FFmpeg startup on Android: packages libc++_shared.so, exposes the matching yt-dlp Python runtime path, and repairs the FFmpeg package runtime beside librubberband when required.'
+            gh release upload "$RELEASE_TAG" OmniScribe-v1.2.0-arm64.apk OmniScribe-v1.2.0-arm64.apk.sha256 --clobber
+            gh release edit "$RELEASE_TAG" --title 'OmniScribe v1.2.0 ARM64 APK' --notes "$NOTES"
           else
-            gh release create "$RELEASE_TAG" OmniScribe-v1.1.1-arm64.apk OmniScribe-v1.1.1-arm64.apk.sha256 --title 'OmniScribe v1.1.1 ARM64 APK' --notes 'Fixes FFmpeg startup on Android: packages libc++_shared.so, exposes the matching yt-dlp Python runtime path, and repairs the FFmpeg package runtime beside librubberband when required.'
+            gh release create "$RELEASE_TAG" OmniScribe-v1.2.0-arm64.apk OmniScribe-v1.2.0-arm64.apk.sha256 --title 'OmniScribe v1.2.0 ARM64 APK' --notes "$NOTES"
           fi
 
       - name: Report success
@@ -118,8 +118,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          SHA="$(cat OmniScribe-v1.1.1-arm64.apk.sha256)"
-          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA native_runtime=libc++_shared.so_verified ffmpeg_runtime_fallback=verified"
+          SHA="$(cat OmniScribe-v1.2.0-arm64.apk.sha256)"
+          gh issue comment "${{ github.event.issue.number }}" --body "OMNISCRIBE_BUILD_SUCCESS run_id=${{ github.run_id }} release=https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG checksum=$SHA android_native_decode=verified audio_conversion_fallback=verified"
 
       - name: Report failure
         if: failure()
