@@ -1,0 +1,83 @@
+name: OmniScribe APK CI
+
+on:
+  push:
+    branches:
+      - build/omniscribe-v1.1
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct OmniScribe source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/omniscribe.part* > /tmp/omniscribe.b64
+          base64 --decode /tmp/omniscribe.b64 > /tmp/omniscribe.zip
+          unzip -t /tmp/omniscribe.zip
+          rm -rf omniscribe
+          mkdir -p omniscribe
+          unzip -q /tmp/omniscribe.zip -d omniscribe
+          test -f omniscribe/app/build.gradle
+          test -f omniscribe/scripts/fetch-whisper.sh
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Fetch whisper.cpp
+        working-directory: omniscribe
+        shell: bash
+        run: bash scripts/fetch-whisper.sh
+
+      - name: Build installable arm64 APK
+        working-directory: omniscribe
+        shell: bash
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Verify and stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="omniscribe/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          cp "$APK" OmniScribe-v1.1-arm64.apk
+          sha256sum OmniScribe-v1.1-arm64.apk > OmniScribe-v1.1-arm64.apk.sha256
+          unzip -t OmniScribe-v1.1-arm64.apk
+          ls -lh OmniScribe-v1.1-arm64.apk OmniScribe-v1.1-arm64.apk.sha256
+
+      - name: Upload OmniScribe APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniScribe-v1.1-arm64
+          path: |
+            OmniScribe-v1.1-arm64.apk
+            OmniScribe-v1.1-arm64.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
