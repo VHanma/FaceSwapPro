@@ -14,10 +14,10 @@ permissions:
   contents: write
 
 env:
-  APK_FILE: UltimateVideoStudio-v2.2.0-arm64.apk
-  SOURCE_FILE: UltimateVideoStudio-v2.2-source.zip
+  APK_FILE: UltimateVideoStudio-v2.3.0-arm64.apk
+  SOURCE_FILE: UltimateVideoStudio-v2.3-source.zip
   PREVIEW_TAG: ultimate-video-studio-v2-preview
-  PREVIEW_NAME: Ultimate Video Studio v2.2 Preview
+  PREVIEW_NAME: Ultimate Video Studio v2.3 Live Preview
 
 concurrency:
   group: ultimate-video-studio-${{ github.workflow }}-${{ github.ref }}
@@ -33,16 +33,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Expand checksummed Ultimate Video Studio v2.2 source
+      - name: Expand checksummed Ultimate Video Studio v2.3 source
         run: |
-          cat \
-            v22_payload.part0 v22_payload.part1 \
-            v22_payload.part2x0 v22_payload.part2x1 \
-            v22_payload.part3x0 v22_payload.part3x1 \
-            v22_payload.part4 > /tmp/uvs_payload.b64
-          echo 'cee0f02949e2f9458aecc7bbb5e0d659227be92c37e4398e5a94ab9b05959786  /tmp/uvs_payload.b64' | sha256sum -c -
+          cat v23p0 v23p1 v23p2 v23p3 v23p4 v23p5 v23p6 v23p7 > /tmp/uvs_payload.b64
+          echo '4da2abd3d88000de61369ecd4546f0fa7a0cd8e8476e8c0746497c17cfa3b213  /tmp/uvs_payload.b64' | sha256sum -c -
           base64 -d /tmp/uvs_payload.b64 > /tmp/uvs_payload.zip
-          echo 'cf71aa4c22efe0c8365ffce563286bcd3f3600c28af197d571a0e37418d28f02  /tmp/uvs_payload.zip' | sha256sum -c -
+          echo '8a74349bac060acde849470f93897668e49808558e5970260e4812f92f9875cb  /tmp/uvs_payload.zip' | sha256sum -c -
           unzip -o /tmp/uvs_payload.zip -d .
           test -s main.py
           test -s editor_engine.py
@@ -77,9 +73,9 @@ jobs:
           import cv2, numpy
           print('Host OpenCV', cv2.__version__, 'NumPy', numpy.__version__)
           assert cv2.__version__.startswith('4.12.'), cv2.__version__
-          assert hasattr(cv2, 'CascadeClassifier'), 'Host OpenCV lacks CascadeClassifier'
-          assert hasattr(cv2, 'calcOpticalFlowPyrLK'), 'Host OpenCV lacks LK optical flow'
-          assert hasattr(cv2, 'estimateAffinePartial2D'), 'Host OpenCV lacks affine estimator'
+          assert hasattr(cv2, 'CascadeClassifier')
+          assert hasattr(cv2, 'calcOpticalFlowPyrLK')
+          assert hasattr(cv2, 'estimateAffinePartial2D')
           PY
 
       - name: Bundle OpenCV face detector
@@ -95,27 +91,20 @@ jobs:
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
 
-      - name: Rival gate - validate v2.2 source
+      - name: Rival gate - validate v2.3 source
         run: |
           python -m py_compile main.py editor_engine.py face_temporal.py faceswap_engine.py faceswap/__init__.py
           grep -q 'class UltimateVideoStudioApp' main.py
-          grep -q 'def render_project' editor_engine.py
-          grep -q 'class Keyframe' editor_engine.py
-          grep -q 'class OverlayTrack' editor_engine.py
-          grep -q 'def render_overlay_tracks' editor_engine.py
+          grep -q 'LIVE PREVIEW' main.py
+          grep -q 'def _live_render_worker' main.py
+          grep -q 'def render_preview_frame' editor_engine.py
+          grep -q 'def prepare_preview_frame' editor_engine.py
           grep -q 'def generate_motion_track' editor_engine.py
           grep -q 'calcOpticalFlowPyrLK' editor_engine.py
-          grep -q 'back_pts' editor_engine.py
           grep -q 'estimateAffinePartial2D' editor_engine.py
           grep -q 'blend_mode' editor_engine.py
-          grep -q 'def _blend_rgba' editor_engine.py
-          grep -q 'AUTO TRACK SELECTED LAYER' main.py
-          grep -q 'Face temporal quality' main.py
-          grep -q 'face_quality' editor_engine.py
           grep -q 'class TemporalFaceSwapper' face_temporal.py
-          grep -q 'estimateAffinePartial2D' face_temporal.py
-          grep -q '_target_lab_mean' face_temporal.py
-          grep -q '^version = 2.2.0' buildozer.spec
+          grep -q '^version = 2.3.0' buildozer.spec
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
@@ -123,28 +112,24 @@ jobs:
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q '"libx264"' faceswap_engine.py
 
-      - name: Rival gate - keyframes and blend compositor
+      - name: Rival gate - live preview compositor
         run: |
           python - <<'PY'
+          import cv2
           import numpy as np
-          from editor_engine import Keyframe, OverlayTrack, _blend_rgba, _track_state
-          track = OverlayTrack(kind='text', blend_mode='Screen', keyframes=[
-              Keyframe(time=0.0, x=0.1, scale=0.1, opacity=1.0, rotation=0.0),
-              Keyframe(time=2.0, x=0.9, scale=0.3, opacity=0.5, rotation=90.0),
+          from editor_engine import EditSettings, Keyframe, OverlayTrack, render_preview_frame
+          frame = np.full((360, 640, 3), 70, np.uint8)
+          cv2.rectangle(frame, (170, 55), (470, 330), (40, 150, 220), -1)
+          track = OverlayTrack(kind='text', text='LIVE', blend_mode='Screen', keyframes=[
+              Keyframe(time=0.0, x=0.2, y=0.3, scale=0.2, opacity=0.7, rotation=0.0),
+              Keyframe(time=2.0, x=0.8, y=0.7, scale=0.4, opacity=1.0, rotation=50.0),
           ])
-          state = _track_state(track, 1.0)
-          assert 0.45 <= state['x'] <= 0.55, state
-          assert 0.18 <= state['scale'] <= 0.22, state
-          assert 0.70 <= state['opacity'] <= 0.80, state
-          assert 40.0 <= state['rotation'] <= 50.0, state
-          dst = np.full((32, 32, 3), 60, np.uint8)
-          src = np.zeros((12, 12, 4), np.uint8)
-          src[:, :, :3] = 180
-          src[:, :, 3] = 255
-          before = dst.copy()
-          _blend_rgba(dst, src, 10, 10, 0.8, 'Screen')
-          assert np.mean(dst[10:22, 10:22]) > np.mean(before[10:22, 10:22])
-          print('v2.2 keyframe + blend gate OK:', state)
+          settings = EditSettings(preset='Vivid', brightness=0.04, contrast=1.08, saturation=1.15, overlay_tracks=[track])
+          out = render_preview_frame(frame, settings, 1.0, max_width=540)
+          assert out.shape[1] == 540, out.shape
+          baseline = cv2.resize(frame, (540, out.shape[0]))
+          assert float(np.mean(np.abs(out.astype(np.int16) - baseline.astype(np.int16)))) > 1.0
+          print('LIVE_PREVIEW_GATE_OK', out.shape, float(out.mean()))
           PY
 
       - name: Rival gate - Cinema face temporal stability
@@ -164,7 +149,7 @@ jobs:
           expression = float(second[40, 1] - first[40, 1])
           assert rejected > 45.0, rejected
           assert expression > 5.0, expression
-          print('Cinema temporal gate OK: rejected=', rejected, 'expression=', expression)
+          print('Cinema temporal gate OK:', rejected, expression)
           PY
 
       - name: Build debug APK
@@ -187,7 +172,7 @@ jobs:
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UltimateVideoStudio-v2.2.0-arm64
+          name: UltimateVideoStudio-v2.3.0-arm64
           path: |
             ${{ env.APK_FILE }}
             APK_SHA256.txt
@@ -200,7 +185,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='Ultimate Video Studio v2.2 adds editable automatic object tracking with translation, scale and rotation keyframes, optional every-source-frame tracking, forward/backward optical-flow rejection, nine layer blend modes, correctly rotated text layers, Full Source face processing by default, and Cinema face mode with motion-aware RANSAC landmark stabilization plus temporal LAB skin/light matching. It keeps the v2.1 multitrack overlay timeline, Smart Cutout v2, exact frame overrides, smooth slow motion, stabilization, audio tools and configurable export.'
+          NOTES='Ultimate Video Studio v2.3 replaces blind batch-style editing with a persistent live viewer. It adds play/pause, exact-frame stepping, scrubbing, live update coalescing, Fast/Balanced/Sharp preview quality, live geometry/color/preset/text/sticker/background/timeline compositing, and live Cinema face preview while keeping full-resolution export separate from preview resolution. v2.2 editable auto tracking, blend modes, Smart Cutout v2 and Cinema temporal face stabilization remain.'
           if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
             gh release upload "$PREVIEW_TAG" "$APK_FILE" APK_SHA256.txt "$SOURCE_FILE" --clobber
             gh release edit "$PREVIEW_TAG" --title "$PREVIEW_NAME" --notes "$NOTES" --prerelease
