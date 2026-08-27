@@ -1,0 +1,359 @@
+--- main.py	2026-08-27 07:59:22.000000000 +0000
++++ /mnt/data/uvs_v24/main.py	2026-08-27 11:44:28.819085526 +0000
+@@ -7,6 +7,7 @@
+ from __future__ import annotations
+ 
+ import copy
++import math
+ import mimetypes
+ import os
+ import time
+@@ -21,6 +22,7 @@
+ from kivy.app import App
+ from kivy.clock import Clock, mainthread
+ from kivy.graphics.texture import Texture
++from kivy.graphics import Color, RoundedRectangle, Rectangle
+ from kivy.metrics import dp
+ from kivy.uix.boxlayout import BoxLayout
+ from kivy.uix.button import Button
+@@ -30,6 +32,7 @@
+ from kivy.uix.label import Label
+ from kivy.uix.progressbar import ProgressBar
+ from kivy.uix.scrollview import ScrollView
++from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
+ from kivy.uix.slider import Slider
+ from kivy.uix.spinner import Spinner
+ from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem
+@@ -163,6 +166,169 @@
+         raise
+ 
+ 
++
++
++# ---------- CapCut-inspired mobile studio shell (original styling, not a clone) ----------
++BG = (0.025, 0.034, 0.040, 1)
++PANEL = (0.055, 0.070, 0.078, 1)
++CARD = (0.075, 0.092, 0.102, 1)
++ACCENT = (0.19, 0.82, 0.86, 1)
++MUTED = (0.60, 0.66, 0.70, 1)
++
++
++class RoundedPanel(BoxLayout):
++    def __init__(self, radius=18, fill=PANEL, **kwargs):
++        super().__init__(**kwargs)
++        self._fill = fill
++        self._radius = dp(radius)
++        with self.canvas.before:
++            self._c = Color(*fill)
++            self._r = RoundedRectangle(pos=self.pos, size=self.size, radius=[self._radius])
++        self.bind(pos=self._sync_bg, size=self._sync_bg)
++
++    def _sync_bg(self, *_):
++        self._r.pos = self.pos
++        self._r.size = self.size
++
++
++
++
++class InteractivePreview(Image):
++    """Video canvas that can directly move/scale/rotate the selected layer.
++
++    One finger drags the selected timeline layer (or the static sticker).
++    Two fingers pinch to scale and twist to rotate. All edits feed the same
++    live-preview/keyframe state used by export, so the canvas is not a fake UI.
++    """
++    def __init__(self, owner, **kwargs):
++        super().__init__(**kwargs)
++        self.owner = owner
++        self._touches = {}
++        self._gesture_start = None
++
++    def _image_rect(self):
++        try:
++            iw, ih = self.norm_image_size
++        except Exception:
++            iw, ih = self.width, self.height
++        iw = max(1.0, float(iw)); ih = max(1.0, float(ih))
++        return self.center_x - iw/2.0, self.center_y - ih/2.0, iw, ih
++
++    def _norm(self, x, y):
++        left, bottom, width, height = self._image_rect()
++        nx = max(0.0, min(1.0, (x-left)/width))
++        ny = max(0.0, min(1.0, 1.0 - (y-bottom)/height))
++        return nx, ny
++
++    def on_touch_down(self, touch):
++        if not self.collide_point(*touch.pos):
++            return super().on_touch_down(touch)
++        if not self.owner._direct_canvas_target_available():
++            return super().on_touch_down(touch)
++        touch.grab(self)
++        self._touches[touch.uid] = touch.pos
++        if len(self._touches) == 1:
++            nx, ny = self._norm(*touch.pos)
++            self.owner._direct_canvas_edit(x=nx, y=ny, commit=False)
++        elif len(self._touches) == 2:
++            pts=list(self._touches.values())
++            dx=pts[1][0]-pts[0][0]; dy=pts[1][1]-pts[0][1]
++            dist=max(1.0, math.hypot(dx,dy)); ang=math.degrees(math.atan2(dy,dx))
++            scale, rot=self.owner._direct_canvas_scale_rotation()
++            self._gesture_start=(dist,ang,scale,rot)
++        return True
++
++    def on_touch_move(self, touch):
++        if touch.grab_current is not self:
++            return super().on_touch_move(touch)
++        self._touches[touch.uid] = touch.pos
++        if len(self._touches) == 1:
++            nx, ny = self._norm(*touch.pos)
++            self.owner._direct_canvas_edit(x=nx, y=ny, commit=False)
++        elif len(self._touches) >= 2:
++            pts=list(self._touches.values())[:2]
++            dx=pts[1][0]-pts[0][0]; dy=pts[1][1]-pts[0][1]
++            dist=max(1.0, math.hypot(dx,dy)); ang=math.degrees(math.atan2(dy,dx))
++            if self._gesture_start is None:
++                scale,rot=self.owner._direct_canvas_scale_rotation()
++                self._gesture_start=(dist,ang,scale,rot)
++            d0,a0,s0,r0=self._gesture_start
++            mx=(pts[0][0]+pts[1][0])*0.5; my=(pts[0][1]+pts[1][1])*0.5
++            nx,ny=self._norm(mx,my)
++            self.owner._direct_canvas_edit(x=nx, y=ny, scale=max(0.01,min(3.0,s0*(dist/d0))), rotation=r0+(ang-a0), commit=False)
++        return True
++
++    def on_touch_up(self, touch):
++        if touch.grab_current is not self:
++            return super().on_touch_up(touch)
++        self._touches.pop(touch.uid, None)
++        touch.ungrab(self)
++        if len(self._touches) < 2:
++            self._gesture_start = None
++        self.owner._direct_canvas_commit()
++        return True
++
++
++class StudioHome(Screen):
++    def __init__(self, shell, **kwargs):
++        super().__init__(**kwargs)
++        self.shell = shell
++        with self.canvas.before:
++            Color(*BG)
++            self._bg = Rectangle(pos=self.pos, size=self.size)
++        self.bind(pos=self._sync_bg, size=self._sync_bg)
++        root = BoxLayout(orientation='vertical', padding=dp(18), spacing=dp(16))
++        self.add_widget(root)
++
++        top = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
++        title = Label(text='[b]ULTIMATE[/b]  STUDIO', markup=True, halign='left', valign='middle', font_size=dp(21), color=(0.92,0.97,1,1))
++        title.bind(size=lambda w,v: setattr(w,'text_size',v))
++        top.add_widget(title)
++        badge = Label(text='OFFLINE', size_hint_x=None, width=dp(78), color=ACCENT, font_size=dp(11))
++        top.add_widget(badge)
++        root.add_widget(top)
++
++        hero = RoundedPanel(orientation='vertical', size_hint_y=None, height=dp(210), padding=dp(22), spacing=dp(10), fill=(0.08,0.22,0.24,1), radius=22)
++        hero.add_widget(Label(text='[b]+  CREATE PROJECT[/b]', markup=True, font_size=dp(24), color=(0.96,1,1,1)))
++        hero.add_widget(Label(text='Pick a video and enter the live editor instantly', font_size=dp(13), color=(0.75,0.88,0.90,1)))
++        create = Button(text='CREATE', size_hint_y=None, height=dp(52), background_normal='', background_color=ACCENT, color=(0.02,0.08,0.09,1), bold=True)
++        create.bind(on_release=lambda *_: self.shell.create_project())
++        hero.add_widget(create)
++        root.add_widget(hero)
++
++        section = BoxLayout(size_hint_y=None, height=dp(38))
++        lab=Label(text='[b]PROJECTS[/b]', markup=True, halign='left', valign='middle', color=(0.90,0.94,0.96,1), font_size=dp(16))
++        lab.bind(size=lambda w,v:setattr(w,'text_size',v))
++        section.add_widget(lab)
++        root.add_widget(section)
++
++        recent = RoundedPanel(orientation='vertical', padding=dp(18), spacing=dp(8), radius=18, fill=CARD)
++        recent.add_widget(Label(text='Your autosaved projects will live here', color=(0.82,0.87,0.89,1), font_size=dp(14)))
++        recent.add_widget(Label(text='Tap Create Project to start. The editor keeps the video visible while you work.', color=MUTED, font_size=dp(12)))
++        root.add_widget(recent)
++
++    def _sync_bg(self, *_):
++        self._bg.pos=self.pos; self._bg.size=self.size
++
++
++class StudioShell(ScreenManager):
++    def __init__(self, **kwargs):
++        super().__init__(transition=NoTransition(), **kwargs)
++        self.home = StudioHome(self, name='home')
++        self.editor_screen = Screen(name='editor')
++        self.editor = UltimateVideoRoot(shell=self)
++        self.editor_screen.add_widget(self.editor)
++        self.add_widget(self.home)
++        self.add_widget(self.editor_screen)
++        self.current='home'
++
++    def create_project(self):
++        self.current='editor'
++        Clock.schedule_once(lambda _dt: self.editor.choose_video(), 0.05)
++
++    def go_home(self):
++        self.current='home'
++
+ class ScrollTab(ScrollView):
+     def __init__(self, **kwargs):
+         super().__init__(do_scroll_x=False, **kwargs)
+@@ -172,8 +338,13 @@
+ 
+ 
+ class UltimateVideoRoot(BoxLayout):
+-    def __init__(self, **kwargs):
++    def __init__(self, shell=None, **kwargs):
+         super().__init__(orientation="vertical", **kwargs)
++        self.shell = shell
++        with self.canvas.before:
++            Color(*BG)
++            self._root_bg = Rectangle(pos=self.pos, size=self.size)
++        self.bind(pos=self._sync_root_bg, size=self._sync_root_bg)
+         self.video_path: Optional[str] = None
+         self.face_path: Optional[str] = None
+         self.sticker_path: Optional[str] = None
+@@ -206,13 +377,14 @@
+         self._live_clock = Clock.schedule_interval(self._live_tick, 1.0 / 30.0)
+         self._live_debounce = None
+ 
+-        self.add_widget(Label(
+-            text="[b]ULTIMATE VIDEO STUDIO[/b]  •  offline creator engine",
+-            markup=True, size_hint_y=None, height=dp(54), font_size=dp(22),
+-            color=(0.28, 0.86, 1.0, 1),
+-        ))
++        topbar = BoxLayout(size_hint_y=None, height=dp(50), padding=[dp(8),dp(4)], spacing=dp(6))
++        home = self._btn("‹", (0.10,0.13,0.15,1), dp(42)); home.size_hint_x=None; home.width=dp(48); home.bind(on_release=lambda *_: self._go_home()); topbar.add_widget(home)
++        title = Label(text="[b]ULTIMATE STUDIO[/b]", markup=True, halign="left", valign="middle", color=(0.92,0.97,1,1), font_size=dp(17))
++        title.bind(size=lambda w,v:setattr(w,"text_size",v)); topbar.add_widget(title)
++        export_quick = self._btn("EXPORT", ACCENT, dp(42)); export_quick.size_hint_x=None; export_quick.width=dp(94); export_quick.bind(on_release=self._quick_export); topbar.add_widget(export_quick)
++        self.add_widget(topbar)
+         self._build_live_preview()
+-        self.tabs = TabbedPanel(do_default_tab=False, tab_width=dp(120), tab_height=dp(44))
++        self.tabs = TabbedPanel(do_default_tab=False, tab_width=dp(82), tab_height=dp(44), tab_pos="bottom_mid")
+         self.add_widget(self.tabs)
+         self._build_project_tab()
+         self._build_edit_tab()
+@@ -229,6 +401,18 @@
+             from android import activity
+             activity.bind(on_activity_result=self._on_activity_result)
+ 
++    def _sync_root_bg(self, *_):
++        self._root_bg.pos=self.pos; self._root_bg.size=self.size
++
++    def _go_home(self):
++        self._live_playing=False
++        if self.shell is not None:
++            self.shell.go_home()
++
++    def _quick_export(self, *_):
++        if hasattr(self, 'export_button'):
++            self.start_export()
++
+     # ---------- UI helpers ----------
+     def _tab(self, name: str) -> ScrollTab:
+         item = TabbedPanelItem(text=name)
+@@ -278,9 +462,9 @@
+ 
+     # ---------- persistent live viewer ----------
+     def _build_live_preview(self):
+-        panel = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(330), padding=[dp(8), 0, dp(8), dp(6)], spacing=dp(5))
++        panel = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(350), padding=[dp(8), 0, dp(8), dp(6)], spacing=dp(5))
+         head = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
+-        head.add_widget(self._label("LIVE PREVIEW • what you see is what you are editing", dp(32), (0.34, 0.88, 1, 1), dp(13)))
++        head.add_widget(self._label("LIVE CANVAS", dp(32), (0.34, 0.88, 1, 1), dp(13)))
+         self.live_preview_quality = self._spinner("Balanced 720p", ["Fast 540p", "Balanced 720p", "Sharp 960p"])
+         self.live_preview_quality.size_hint_x = None
+         self.live_preview_quality.width = dp(126)
+@@ -288,7 +472,7 @@
+         head.add_widget(self.live_preview_quality)
+         panel.add_widget(head)
+ 
+-        self.live_preview = Image(size_hint_y=None, height=dp(220), allow_stretch=True, keep_ratio=True)
++        self.live_preview = InteractivePreview(self, size_hint_y=None, height=dp(242), allow_stretch=True, keep_ratio=True)
+         panel.add_widget(self.live_preview)
+ 
+         seek_row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(6))
+@@ -305,7 +489,7 @@
+         forward = self._btn("1F ▶", (0.18, 0.22, 0.32, 1), dp(42)); forward.bind(on_release=lambda *_: self.live_step_frame(1)); controls.add_widget(forward)
+         panel.add_widget(controls)
+ 
+-        self.live_status = self._label("Choose a video. Every visual edit will update here without exporting.", dp(34), (0.68, 0.76, 0.88, 1), dp(11))
++        self.live_status = self._label("Choose a video. Every visual edit updates here. Select a layer, then drag / pinch / twist directly on the video.", dp(38), (0.68, 0.76, 0.88, 1), dp(11))
+         panel.add_widget(self.live_status)
+         self.add_widget(panel)
+ 
+@@ -724,6 +908,51 @@
+         self.status = self._label("Ready.", dp(110), (0.72,0.94,0.78,1)); t.body.add_widget(self.status)
+         t.body.add_widget(self._label("Exports are written to Movies/UltimateVideoStudio. Source video remains untouched.", dp(70), (0.60,0.64,0.75,1), dp(12)))
+ 
++    # ---------- direct canvas editing ----------
++    def _direct_canvas_target_available(self) -> bool:
++        try:
++            return self._selected_track() is not None or bool(self.sticker_path)
++        except Exception:
++            return bool(self.sticker_path)
++
++    def _direct_canvas_scale_rotation(self):
++        track = self._selected_track() if hasattr(self, "track_spinner") else None
++        if track is not None:
++            return max(0.01, self._float(self.track_scale, 0.25)), self._float(self.track_rotation, 0.0)
++        return max(0.01, self._float(self.sticker_scale, 0.25)), 0.0
++
++    def _direct_canvas_edit(self, x=None, y=None, scale=None, rotation=None, commit=False):
++        track = self._selected_track() if hasattr(self, "track_spinner") else None
++        if track is not None:
++            if x is not None: self.track_x.text = f"{max(0.0,min(1.0,float(x))):.4f}"
++            if y is not None: self.track_y.text = f"{max(0.0,min(1.0,float(y))):.4f}"
++            if scale is not None: self.track_scale.text = f"{max(0.01,min(3.0,float(scale))):.4f}"
++            if rotation is not None: self.track_rotation.text = f"{float(rotation):.2f}"
++            # During a drag we mutate the key at the current playhead directly so
++            # the live compositor follows the finger. On release we refresh labels.
++            seconds = float(self._live_seconds)
++            self.timeline_time.text = f"{seconds:.6f}"
++            key = self._default_track_key(seconds)
++            replaced = False
++            for i, existing in enumerate(track.keyframes):
++                if abs(existing.time-key.time) <= 0.0005:
++                    track.keyframes[i] = key; replaced=True; break
++            if not replaced:
++                track.keyframes.append(key)
++            track.keyframes.sort(key=lambda item:item.time)
++            self._schedule_live_refresh(0.0)
++            if commit:
++                self._refresh_tracks(track.track_id)
++            return
++        if self.sticker_path:
++            if x is not None: self.sticker_x.text = f"{max(0.0,min(1.0,float(x))):.4f}"
++            if y is not None: self.sticker_y.text = f"{max(0.0,min(1.0,float(y))):.4f}"
++            if scale is not None: self.sticker_scale.text = f"{max(0.01,min(3.0,float(scale))):.4f}"
++            self._schedule_live_refresh(0.0)
++
++    def _direct_canvas_commit(self):
++        self._direct_canvas_edit(commit=True)
++
+     # ---------- timeline ----------
+     def _selected_track(self) -> Optional[OverlayTrack]:
+         track_id = self._track_labels.get(getattr(self.track_spinner, "text", ""))
+@@ -1219,10 +1448,12 @@
+ class UltimateVideoStudioApp(App):
+     def build(self):
+         self.title="Ultimate Video Studio"
+-        return UltimateVideoRoot()
++        return StudioShell()
+     def on_stop(self):
+         try:
+-            if self.root: self.root.cleanup()
++            if self.root:
++                editor=getattr(self.root,'editor',None)
++                if editor: editor.cleanup()
+         except Exception: pass
+ 
+ 
+--- buildozer.spec	2026-08-27 07:58:23.000000000 +0000
++++ /mnt/data/uvs_v24/buildozer.spec	2026-08-27 09:50:14.000000000 +0000
+@@ -5,7 +5,7 @@
+ source.dir = .
+ source.include_exts = py,xml,png,jpg,jpeg,webp,kv,atlas,json
+ source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__,tests
+-version = 2.3.0
++version = 2.4.0
+ 
+ # Offline Android editor stack: Kivy UI + OpenCV frame processing + bundled FFmpeg encoders.
+ requirements = python3,kivy,android,pyjnius,numpy,opencv,ffmpeg,av_codecs
