@@ -1,0 +1,155 @@
+name: Build Ultimate Video Studio v2.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'ultimate/video-studio-v2.4-ui'
+
+permissions:
+  contents: write
+
+env:
+  APK_FILE: UltimateVideoStudio-v2.4.0-arm64.apk
+  SOURCE_FILE: UltimateVideoStudio-v2.4-source.zip
+
+concurrency:
+  group: ultimate-video-studio-v24-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile v2.4 Live Canvas ARM64 APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Reconstruct proven v2.3 engine and apply v2.4 UI
+        run: |
+          cat v23p0 v23p1 v23p2 v23p3 v23p4 v23p5 v23p6 v23p7 > /tmp/uvs_payload.b64
+          echo '4da2abd3d88000de61369ecd4546f0fa7a0cd8e8476e8c0746497c17cfa3b213  /tmp/uvs_payload.b64' | sha256sum -c -
+          base64 -d /tmp/uvs_payload.b64 > /tmp/uvs_payload.zip
+          echo '8a74349bac060acde849470f93897668e49808558e5970260e4812f92f9875cb  /tmp/uvs_payload.zip' | sha256sum -c -
+          unzip -o /tmp/uvs_payload.zip -d .
+          patch -p0 --batch < v24_upgrade.patch
+          test -s main.py
+          test -s editor_engine.py
+          test -s face_temporal.py
+          grep -q '^version = 2.4.0' buildozer.spec
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Android build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ant autoconf automake autopoint build-essential ccache cmake gettext git lbzip2 libffi-dev libltdl-dev libncurses5-dev libncursesw5-dev libssl-dev libtool patch pkg-config python3-dev unzip wget zip zlib1g-dev
+
+      - name: Install builder and host test stack
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install 'buildozer==1.6.0' 'numpy<2.3' 'opencv-python-headless==4.12.0.88'
+          buildozer --version
+
+      - name: Bundle OpenCV detector and prepare face engine
+        run: |
+          mkdir -p assets
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/opencv/opencv/4.12.0/data/haarcascades/haarcascade_frontalface_alt2.xml --output assets/haarcascade_frontalface_alt2.xml
+          cp faceswap.py faceswap_engine.py
+          test -s assets/haarcascade_frontalface_alt2.xml
+          test -s faceswap_engine.py
+
+      - name: Rival gate - v2.4 UI and source contract
+        run: |
+          python -m py_compile main.py editor_engine.py face_temporal.py faceswap_engine.py faceswap/__init__.py
+          grep -q 'class StudioHome' main.py
+          grep -q 'CREATE PROJECT' main.py
+          grep -q 'class InteractivePreview' main.py
+          grep -q 'drag / pinch / twist' main.py
+          grep -q 'tab_pos="bottom_mid"' main.py
+          grep -q 'def _direct_canvas_edit' main.py
+          grep -q 'LIVE CANVAS' main.py
+          grep -q 'def render_preview_frame' editor_engine.py
+          grep -q 'def generate_motion_track' editor_engine.py
+          grep -q 'class TemporalFaceSwapper' face_temporal.py
+          grep -q '^version = 2.4.0' buildozer.spec
+          grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
+          grep -q 'android.api = 36' buildozer.spec
+          grep -q 'android.ndk = 28c' buildozer.spec
+          grep -q 'libffmpegbin.so' faceswap/__init__.py
+          grep -q '"libx264"' faceswap_engine.py
+
+      - name: Rival gate - live preview compositor
+        run: |
+          python - <<'PY'
+          import cv2, numpy as np
+          from editor_engine import EditSettings, Keyframe, OverlayTrack, render_preview_frame, _track_state
+          frame=np.full((360,640,3),70,np.uint8)
+          track=OverlayTrack(kind='text', text='LIVE', blend_mode='Screen', keyframes=[
+              Keyframe(time=0,x=.2,y=.3,scale=.2,opacity=.7,rotation=0),
+              Keyframe(time=2,x=.8,y=.7,scale=.4,opacity=1,rotation=50)])
+          settings=EditSettings(preset='Vivid', brightness=.04, contrast=1.08, saturation=1.15, overlay_tracks=[track])
+          out=render_preview_frame(frame,settings,1.0,max_width=540)
+          state=_track_state(track,1.0)
+          assert out.shape[1]==540, out.shape
+          assert .45 < state['x'] < .55 and 20 < state['rotation'] < 30, state
+          baseline=cv2.resize(frame,(540,out.shape[0]))
+          assert float(np.mean(np.abs(out.astype(np.int16)-baseline.astype(np.int16)))) > 1.0
+          print('V24_LIVE_GATE_OK',out.shape,state)
+          PY
+
+      - name: Rival gate - Cinema temporal face stability
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from face_temporal import TemporalFaceSwapper
+          t=np.linspace(0,1,45,dtype=np.float32)
+          base=np.column_stack((80+150*t,120+35*np.sin(t*5))).astype(np.float32)
+          s=TemporalFaceSwapper(detection_width=640, quality='Cinema')
+          first=s._smooth_target_points(base,(55,55,220,250))
+          measured=base+np.array([4,3],np.float32)
+          measured[5]+=np.array([120,-80],np.float32)
+          measured[40]+=np.array([0,18],np.float32)
+          second=s._smooth_target_points(measured,(59,58,220,250))
+          assert float(np.linalg.norm(second[5]-measured[5])) > 45
+          assert float(second[40,1]-first[40,1]) > 5
+          print('V24_CINEMA_GATE_OK')
+          PY
+
+      - name: Build debug APK
+        env:
+          USE_CCACHE: '1'
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          yes | buildozer -v android debug
+
+      - name: Verify and package APK
+        run: |
+          APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          unzip -l "$APK" | grep -q 'libffmpegbin.so'
+          cp "$APK" "$APK_FILE"
+          sha256sum "$APK_FILE" | tee APK_SHA256.txt
+          zip -9 "$SOURCE_FILE" main.py editor_engine.py face_temporal.py buildozer.spec
+          ls -lh "$APK_FILE" "$SOURCE_FILE"
+
+      - name: Upload installable APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltimateVideoStudio-v2.4.0-arm64
+          path: |
+            ${{ env.APK_FILE }}
+            APK_SHA256.txt
+            ${{ env.SOURCE_FILE }}
+          if-no-files-found: error
+          retention-days: 30
