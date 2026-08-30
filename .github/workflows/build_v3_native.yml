@@ -1,0 +1,98 @@
+name: Build Ultimate Video Studio v3 Native
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'ultimate/video-studio-v3-native'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uvs-v3-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Native Android compile and Rival gates
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout committed source
+        uses: actions/checkout@v5
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 platform
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+
+      - name: Rival gate - architecture is genuinely native
+        run: |
+          test -s settings.gradle.kts
+          test -s app/build.gradle.kts
+          test -s app/src/main/AndroidManifest.xml
+          test -s app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'androidx.media3:media3-exoplayer:.*1.11.0' app/build.gradle.kts
+          grep -q 'androidx.media3:media3-transformer:.*1.11.0' app/build.gradle.kts
+          grep -q 'setVideoEffects' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'Transformer.Builder' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'MediaMetadataRetriever' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'takePersistableUriPermission' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'Movies/UltimateVideoStudio' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          if grep -R -n -E 'kivy|PythonActivity|buildozer|pyjnius' app; then
+            echo 'Python/Kivy leaked into native app module'
+            exit 1
+          fi
+
+      - name: Rival gate - committed editor features are wired
+        run: |
+          grep -q 'showTrimTools' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'showAdjustTools' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'showSpeedTools' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'GestureTextView' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'undoStack' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'saveState' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'generateTimeline' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+          grep -q 'publishToGallery' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
+
+      - name: Compile native APK
+        run: |
+          gradle --version
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        run: |
+          APK='app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee apk_badging.txt
+          grep -q "package: name='com.ultimatevideostudio.native3'" apk_badging.txt
+          unzip -l "$APK" | grep -q 'classes.dex'
+          cp "$APK" UltimateVideoStudio-v3.0.0-native.apk
+          sha256sum UltimateVideoStudio-v3.0.0-native.apk | tee APK_SHA256.txt
+          ls -lh UltimateVideoStudio-v3.0.0-native.apk APK_SHA256.txt
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltimateVideoStudio-v3.0.0-native
+          path: |
+            UltimateVideoStudio-v3.0.0-native.apk
+            APK_SHA256.txt
+            apk_badging.txt
+          if-no-files-found: error
+          retention-days: 30
