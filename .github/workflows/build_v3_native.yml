@@ -87,6 +87,41 @@ jobs:
           sha256sum UltimateVideoStudio-v3.0.0-native.apk | tee APK_SHA256.txt
           ls -lh UltimateVideoStudio-v3.0.0-native.apk APK_SHA256.txt
 
+      - name: Enable KVM for runtime gate
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Rival runtime gate - install and boot real APK
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            adb install -r UltimateVideoStudio-v3.0.0-native.apk
+            adb logcat -c
+            adb shell am force-stop com.ultimatevideostudio.native3
+            adb shell am start -W -n com.ultimatevideostudio.native3/.MainActivity | tee runtime_start.txt
+            sleep 4
+            PID="$(adb shell pidof com.ultimatevideostudio.native3 | tr -d '\r')"
+            test -n "$PID"
+            adb shell uiautomator dump /sdcard/uvs_window.xml
+            adb pull /sdcard/uvs_window.xml uvs_window.xml
+            grep -q 'CREATE PROJECT' uvs_window.xml
+            grep -q 'ULTIMATE' uvs_window.xml
+            adb exec-out screencap -p > uvs_home.png
+            if adb logcat -d | grep -E 'FATAL EXCEPTION|AndroidRuntime.*com\.ultimatevideostudio\.native3'; then
+              echo 'Runtime crash detected'
+              exit 1
+            fi
+            echo "Runtime boot gate passed with PID=$PID"
+
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
@@ -95,5 +130,8 @@ jobs:
             UltimateVideoStudio-v3.0.0-native.apk
             APK_SHA256.txt
             apk_badging.txt
+            runtime_start.txt
+            uvs_window.xml
+            uvs_home.png
           if-no-files-found: error
           retention-days: 30
