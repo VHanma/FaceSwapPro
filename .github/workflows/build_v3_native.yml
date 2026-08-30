@@ -103,7 +103,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -euo pipefail
+            set -eu
             adb install -r UltimateVideoStudio-v3.0.0-native.apk
             adb logcat -c
             adb shell am force-stop com.ultimatevideostudio.native3
