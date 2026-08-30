@@ -47,8 +47,9 @@ jobs:
           test -s app/build.gradle.kts
           test -s app/src/main/AndroidManifest.xml
           test -s app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
-          grep -q 'androidx.media3:media3-exoplayer:.*1.11.0' app/build.gradle.kts
-          grep -q 'androidx.media3:media3-transformer:.*1.11.0' app/build.gradle.kts
+          grep -q 'val media3 = "1.11.0"' app/build.gradle.kts
+          grep -q 'androidx.media3:media3-exoplayer:\$media3' app/build.gradle.kts
+          grep -q 'androidx.media3:media3-transformer:\$media3' app/build.gradle.kts
           grep -q 'setVideoEffects' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
           grep -q 'Transformer.Builder' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
           grep -q 'MediaMetadataRetriever' app/src/main/java/com/ultimatevideostudio/native3/MainActivity.kt
