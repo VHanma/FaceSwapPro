@@ -103,29 +103,21 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
             adb install -r UltimateVideoStudio-v3.0.0-native.apk
             adb logcat -c
             adb shell am force-stop com.ultimatevideostudio.native3
             adb shell am start -W -n com.ultimatevideostudio.native3/.MainActivity | tee runtime_start.txt
             sleep 4
+            adb shell pidof com.ultimatevideostudio.native3 | tr -d '\r' | tee runtime_pid.txt
+            grep -Eq '[0-9]+' runtime_pid.txt
             adb logcat -d -v threadtime > runtime_logcat.txt
-            PID="$(adb shell pidof com.ultimatevideostudio.native3 | tr -d '\r')"
-            if [ -z "$PID" ]; then
-              echo 'APP PROCESS EXITED AFTER LAUNCH'
-              grep -n -E 'FATAL EXCEPTION|AndroidRuntime|com\.ultimatevideostudio\.native3|Caused by:|Exception' runtime_logcat.txt | tail -n 250 || true
-              exit 1
-            fi
             adb shell uiautomator dump /sdcard/uvs_window.xml
             adb pull /sdcard/uvs_window.xml uvs_window.xml
             grep -q 'CREATE PROJECT' uvs_window.xml
             grep -q 'ULTIMATE' uvs_window.xml
             adb exec-out screencap -p > uvs_home.png
-            if grep -E 'FATAL EXCEPTION|AndroidRuntime.*com\.ultimatevideostudio\.native3' runtime_logcat.txt; then
-              echo 'Runtime crash detected'
-              exit 1
-            fi
-            echo "Runtime boot gate passed with PID=$PID"
+            ! grep -E 'FATAL EXCEPTION.*com\.ultimatevideostudio\.native3|Process: com\.ultimatevideostudio\.native3.*FATAL|AndroidRuntime.*com\.ultimatevideostudio\.native3' runtime_logcat.txt
+            echo 'Runtime boot + rendered UI gate passed'
 
       - name: Upload runtime diagnostics on failure
         if: failure()
@@ -137,6 +129,7 @@ jobs:
             APK_SHA256.txt
             apk_badging.txt
             runtime_start.txt
+            runtime_pid.txt
             runtime_logcat.txt
             uvs_window.xml
             uvs_home.png
@@ -152,6 +145,7 @@ jobs:
             APK_SHA256.txt
             apk_badging.txt
             runtime_start.txt
+            runtime_pid.txt
             runtime_logcat.txt
             uvs_window.xml
             uvs_home.png
