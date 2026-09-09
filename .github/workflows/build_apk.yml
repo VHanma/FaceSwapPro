@@ -1,4 +1,4 @@
-name: Build and publish FaceSwap Pro APK
+name: Build and publish FaceSwap Pro Omega APK
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ permissions:
 
 env:
   APK_RELEASE_TAG: faceswappro-latest
-  APK_RELEASE_NAME: FaceSwap Pro Latest APK
+  APK_RELEASE_NAME: FaceSwap Pro Omega Latest APK
 
 concurrency:
   group: faceswappro-apk-${{ github.workflow }}-${{ github.ref }}
@@ -73,19 +73,24 @@ jobs:
         run: |
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
+          test -s omega_engine.py
 
-      - name: Validate repaired source
+      - name: Validate Omega source
         run: |
-          python -m py_compile main.py faceswap_engine.py faceswap/__init__.py
+          python -m py_compile main.py faceswap_engine.py omega_engine.py faceswap/__init__.py
           grep -q 'def process_video' faceswap_engine.py
-          grep -q 'from faceswap_engine import' faceswap/__init__.py
+          grep -q 'class OmegaFaceSwapper' omega_engine.py
+          grep -q 'calcOpticalFlowPyrLK' omega_engine.py
+          grep -q 'estimateAffinePartial2D' omega_engine.py
+          grep -q 'from omega_engine import OmegaFaceSwapper' faceswap/__init__.py
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q 'TemporaryFile' faceswap/__init__.py
+          grep -q '"17"' faceswap/__init__.py
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
+          grep -q 'version = 1.4.0' buildozer.spec
           grep -q 'p4a.branch = v2026.05.09' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
-          grep -q '"libx264"' faceswap_engine.py
 
       - name: Build debug APK
         env:
@@ -99,16 +104,17 @@ jobs:
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'libffmpegbin.so'
-          cp "$APK" FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          ls -lh FaceSwapPro-v1.3.2-expression-aware-arm64.apk
-          sha256sum FaceSwapPro-v1.3.2-expression-aware-arm64.apk | tee APK_SHA256.txt
+          unzip -l "$APK" | grep -q 'omega_engine.py'
+          cp "$APK" FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
+          ls -lh FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
+          sha256sum FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk | tee APK_SHA256.txt
 
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v1.3.2-expression-aware-arm64
+          name: FaceSwapPro-v1.4.0-Omega-temporal-arm64
           path: |
-            FaceSwapPro-v1.3.2-expression-aware-arm64.apk
+            FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
             APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
@@ -118,18 +124,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES='v1.4.0 Omega adds optical-flow face tracking, adaptive landmark fusion, detector-loss recovery, motion-aware anti-flicker, previous-frame reprojection, enhanced source texture, local exposure matching, seam-safe microdetail recovery, and higher-quality H.264/AAC export while remaining fully offline.'
           if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
+              FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk APK_SHA256.txt \
               --clobber
             gh release edit "$APK_RELEASE_TAG" \
               --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
+              --notes "$NOTES" \
               --latest
           else
             gh release create "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.3.2-expression-aware-arm64.apk APK_SHA256.txt \
+              FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk APK_SHA256.txt \
               --title "$APK_RELEASE_NAME" \
-              --notes 'v1.3.2 fixes the Android faceswap.py packaging collision while retaining expression-aware mouth, eye, eyebrow, cheek and jaw motion, Android-safe FFmpeg launch, audio preservation, and repaired video saving.' \
+              --notes "$NOTES" \
               --latest
           fi
