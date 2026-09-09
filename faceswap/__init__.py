@@ -1,10 +1,4 @@
-"""Android-safe FaceSwap Pro runtime wrapper.
-
-The build copies the expression engine to ``faceswap_engine.py`` before
-Buildozer packages the app. Keeping the engine under a different module name
-avoids the Python package/module collision that caused Android to import this
-package and then fail looking for a missing sibling ``faceswap.py`` file.
-"""
+"""Android-safe FaceSwap Pro Omega runtime wrapper."""
 
 from __future__ import annotations
 
@@ -14,17 +8,11 @@ import subprocess
 import tempfile
 from typing import Optional
 
-from faceswap_engine import (
-    CancelCallback,
-    FaceSwapper as BaseFaceSwapper,
-    ProgressCallback,
-    Rect,
-    VideoInfo,
-)
+from faceswap_engine import CancelCallback, ProgressCallback, VideoInfo
+from omega_engine import OmegaFaceSwapper
 
 
 def _android_native_library_dir() -> Optional[str]:
-    """Return the APK native-library directory when running on Android."""
     try:
         from jnius import autoclass
 
@@ -35,8 +23,8 @@ def _android_native_library_dir() -> Optional[str]:
         return None
 
 
-class FaceSwapper(BaseFaceSwapper):
-    """Expression engine with Android-safe FFmpeg process handling."""
+class FaceSwapper(OmegaFaceSwapper):
+    """Omega engine with Android-safe bundled FFmpeg process handling."""
 
     @staticmethod
     def _ffmpeg_binary() -> str:
@@ -113,15 +101,15 @@ class FaceSwapper(BaseFaceSwapper):
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast",
+            "superfast",
             "-crf",
-            "20",
+            "17",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            "192k",
             "-movflags",
             "+faststart",
             "-shortest",
@@ -167,7 +155,7 @@ class FaceSwapper(BaseFaceSwapper):
 
         timed_out = False
         try:
-            code = process.wait(timeout=120)
+            code = process.wait(timeout=180)
         except subprocess.TimeoutExpired:
             timed_out = True
             process.kill()
