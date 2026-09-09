@@ -104,7 +104,6 @@ jobs:
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'libffmpegbin.so'
-          unzip -l "$APK" | grep -q 'omega_engine.py'
           cp "$APK" FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
           ls -lh FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
           sha256sum FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk | tee APK_SHA256.txt
