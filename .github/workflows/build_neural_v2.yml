@@ -54,7 +54,10 @@ jobs:
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
+          # Upstream's Aug 16 dependency bump moved compileSdk 36 -> 37 and
+          # Glide 4.16.0 -> 5.0.9 together. Keep the proven API-36 Glide line.
           sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
+          sed -i 's/glide = "5.0.9"/glide = "4.16.0"/' neural-upstream/gradle/libs.versions.toml
           python - <<'PY'
           from pathlib import Path
           p = Path('neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java')
@@ -68,6 +71,7 @@ jobs:
           PY
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
+          grep -q 'glide = "4.16.0"' neural-upstream/gradle/libs.versions.toml
           grep -q 'org.vaan.faceswap.neuralv2' neural-upstream/app/build.gradle.kts
           grep -q 'FaceSwap Pro Neural v2' neural-upstream/app/src/main/res/values/strings.xml
           grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
