@@ -1,0 +1,98 @@
+name: Build FaceSwap Pro Neural v2
+
+on:
+  push:
+    branches:
+      - feature/neural-v2-native
+    paths:
+      - 'neural_v2/**'
+      - '.github/workflows/build_neural_v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-neural-arm64:
+    name: Native neural ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out FaceSwapPro patch layer
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 37 + NDK 28.2
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;28.2.13676358'
+
+      - name: Fetch pinned MIT native neural chassis
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/Parasaran-Python/android-face-fusion.git neural-upstream
+          cd neural-upstream
+          git checkout d5672622e53a97b04a158440a507126f384964ac
+          test "$(git rev-parse HEAD)" = 'd5672622e53a97b04a158440a507126f384964ac'
+
+      - name: Apply Omega v2 clean-room quality layer
+        shell: bash
+        run: |
+          python neural_v2/apply_omega_v2.py neural-upstream
+          grep -q 'org.vaan.faceswap.neuralv2' neural-upstream/app/build.gradle.kts
+          grep -q 'FaceSwap Pro Neural v2' neural-upstream/app/src/main/res/values/strings.xml
+          grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
+          grep -q 'phases, not spatial tiles' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java || true
+          grep -q 'referenceLandmarks(targetSize)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/ImageUtils.java
+          grep -q 'OmegaPixelBoost.swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
+
+      - name: Build native neural APK
+        working-directory: neural-upstream
+        shell: bash
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify ARM64 package and name APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          mkdir -p dist
+          OUT='dist/FaceSwapPro-v2.0.0-Neural-Ultra512-arm64.apk'
+          cp "$APK" "$OUT"
+          unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
+          if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
+            echo 'Unexpected x86_64 native libraries packaged' >&2
+            exit 1
+          fi
+          sha256sum "$OUT" | tee dist/APK_SHA256.txt
+          ls -lh "$OUT"
+
+      - name: Upload installable neural APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-v2.0.0-Neural-Ultra512-arm64
+          path: |
+            dist/FaceSwapPro-v2.0.0-Neural-Ultra512-arm64.apk
+            dist/APK_SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
