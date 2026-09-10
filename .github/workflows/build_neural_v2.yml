@@ -54,14 +54,24 @@ jobs:
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
-          # Upstream moved to API 37 one day before this build; current hosted SDK catalog
-          # exposes stable API 36, matching FaceSwapPro's Android 16 target.
           sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java')
+          s = p.read_text()
+          s = s.replace('import android.util.Log;\n', 'import android.util.Log;\nimport ai.onnxruntime.OrtException;\n', 1)
+          s = s.replace('Bitmap targetImage) {', 'Bitmap targetImage) throws OrtException {', 1)
+          s = s.replace('Bitmap targetImage, int phases) {', 'Bitmap targetImage, int phases) throws OrtException {', 1)
+          if s.count('throws OrtException') != 2:
+              raise SystemExit('OrtException propagation patch failed')
+          p.write_text(s)
+          PY
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
           grep -q 'org.vaan.faceswap.neuralv2' neural-upstream/app/build.gradle.kts
           grep -q 'FaceSwap Pro Neural v2' neural-upstream/app/src/main/res/values/strings.xml
           grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
+          grep -q 'throws OrtException' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
           grep -q 'referenceLandmarks(targetSize)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/ImageUtils.java
           grep -q 'OmegaPixelBoost.swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
 
