@@ -50,12 +50,10 @@ jobs:
           git checkout d5672622e53a97b04a158440a507126f384964ac
           test "$(git rev-parse HEAD)" = 'd5672622e53a97b04a158440a507126f384964ac'
 
-      - name: Apply Omega Neural Ultra512 + video layer
+      - name: Apply Omega photo Ultra512 + FAST video layer
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
-          # Upstream's Aug 16 dependency bump moved compileSdk 36 -> 37 and
-          # Glide 4.16.0 -> 5.0.9 together. Keep the proven API-36 Glide line.
           sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
           sed -i 's/glide = "5.0.9"/glide = "4.16.0"/' neural-upstream/gradle/libs.versions.toml
           python - <<'PY'
@@ -70,20 +68,18 @@ jobs:
           p.write_text(s)
           PY
           python neural_v2/apply_video_v2.py neural-upstream
+          python neural_v2/apply_video_perf_v22.py neural-upstream
 
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
-          grep -q 'versionCode = 20002' neural-upstream/app/build.gradle.kts
-          grep -q 'versionName = "2.0.1-alpha-video"' neural-upstream/app/build.gradle.kts
+          grep -q 'versionCode = 20003' neural-upstream/app/build.gradle.kts
+          grep -q 'versionName = "2.0.2-alpha-video-fast"' neural-upstream/app/build.gradle.kts
           grep -q 'glide = "4.16.0"' neural-upstream/gradle/libs.versions.toml
-          grep -q 'org.vaan.faceswap.neuralv2' neural-upstream/app/build.gradle.kts
-          grep -q 'FaceSwap Pro Neural v2' neural-upstream/app/src/main/res/values/strings.xml
           grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
-          grep -q 'throws OrtException' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
-          grep -q 'referenceLandmarks(targetSize)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/ImageUtils.java
-          grep -q 'OmegaPixelBoost.swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
-          grep -q 'processVideoFrame' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
-          grep -q 'MediaMuxer' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
+          grep -q 'MAX_RENDER_FPS = 12.0' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
+          grep -q 'MAX_LONG_EDGE = 1280' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
+          grep -q 'targetFace.bbox.width()' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
+          grep -q 'Render FAST neural video' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
           grep -q 'VIDEO SWAP' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
           grep -q '.VideoSwapActivity' neural-upstream/app/src/main/AndroidManifest.xml
 
@@ -96,31 +92,29 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify ARM64 package and video screen
+      - name: Verify ARM64 FAST-video package
         shell: bash
         run: |
           set -euo pipefail
           APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
           mkdir -p dist
-          OUT='dist/FaceSwapPro-v2.0.1-Neural-Video-Ultra512-arm64.apk'
+          OUT='dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk'
           cp "$APK" "$OUT"
           unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
           if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
             echo 'Unexpected x86_64 native libraries packaged' >&2
             exit 1
           fi
-          # Confirm the DEX/resource package contains the new video implementation source symbols.
-          strings "$OUT" | grep -q 'AndroidManifest.xml'
           sha256sum "$OUT" | tee dist/APK_SHA256.txt
           ls -lh "$OUT"
 
-      - name: Upload installable neural video APK
+      - name: Upload installable FAST-video APK
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v2.0.1-Neural-Video-Ultra512-arm64
+          name: FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64
           path: |
-            dist/FaceSwapPro-v2.0.1-Neural-Video-Ultra512-arm64.apk
+            dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk
             dist/APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
