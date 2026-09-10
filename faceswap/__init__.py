@@ -9,7 +9,7 @@ import tempfile
 from typing import Optional
 
 from faceswap_engine import CancelCallback, ProgressCallback, VideoInfo
-from omega_engine import OmegaFaceSwapper
+from omega_v15 import OmegaFaceSwapper
 
 
 def _android_native_library_dir() -> Optional[str]:
@@ -24,7 +24,7 @@ def _android_native_library_dir() -> Optional[str]:
 
 
 class FaceSwapper(OmegaFaceSwapper):
-    """Omega engine with Android-safe bundled FFmpeg process handling."""
+    """Omega v1.5 engine with Android-safe bundled FFmpeg handling."""
 
     @staticmethod
     def _ffmpeg_binary() -> str:
@@ -103,7 +103,7 @@ class FaceSwapper(OmegaFaceSwapper):
             "-preset",
             "superfast",
             "-crf",
-            "17",
+            "15",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
