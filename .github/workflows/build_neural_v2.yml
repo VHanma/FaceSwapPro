@@ -1,0 +1,120 @@
+name: Build FaceSwap Pro Neural v2
+
+on:
+  push:
+    branches:
+      - feature/neural-v2-native
+    paths:
+      - 'neural_v2/**'
+      - '.github/workflows/build_neural_v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-neural-arm64:
+    name: Native neural ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out FaceSwapPro patch layer
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 36 + NDK 28.2
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+
+      - name: Fetch pinned MIT native neural chassis
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/Parasaran-Python/android-face-fusion.git neural-upstream
+          cd neural-upstream
+          git checkout d5672622e53a97b04a158440a507126f384964ac
+          test "$(git rev-parse HEAD)" = 'd5672622e53a97b04a158440a507126f384964ac'
+
+      - name: Apply Omega photo Ultra512 + FAST video layer
+        shell: bash
+        run: |
+          python neural_v2/apply_omega_v2.py neural-upstream
+          sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
+          sed -i 's/glide = "5.0.9"/glide = "4.16.0"/' neural-upstream/gradle/libs.versions.toml
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java')
+          s = p.read_text()
+          s = s.replace('import android.util.Log;\n', 'import android.util.Log;\nimport ai.onnxruntime.OrtException;\n', 1)
+          s = s.replace('Bitmap targetImage) {', 'Bitmap targetImage) throws OrtException {', 1)
+          s = s.replace('Bitmap targetImage, int phases) {', 'Bitmap targetImage, int phases) throws OrtException {', 1)
+          if s.count('throws OrtException') != 2:
+              raise SystemExit('OrtException propagation patch failed')
+          p.write_text(s)
+          PY
+          python neural_v2/apply_video_v2.py neural-upstream
+          python neural_v2/apply_video_perf_v22.py neural-upstream
+
+          grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
+          grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
+          grep -q 'versionCode = 20003' neural-upstream/app/build.gradle.kts
+          grep -q 'versionName = "2.0.2-alpha-video-fast"' neural-upstream/app/build.gradle.kts
+          grep -q 'glide = "4.16.0"' neural-upstream/gradle/libs.versions.toml
+          grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
+          grep -q 'MAX_RENDER_FPS = 12.0' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
+          grep -q 'MAX_LONG_EDGE = 1280' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
+          grep -q 'targetFace.bbox.width()' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
+          grep -q 'Render FAST neural video' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'VIDEO SWAP' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
+          grep -q '.VideoSwapActivity' neural-upstream/app/src/main/AndroidManifest.xml
+
+      - name: Build native neural APK
+        working-directory: neural-upstream
+        shell: bash
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify ARM64 FAST-video package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          mkdir -p dist
+          OUT='dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk'
+          cp "$APK" "$OUT"
+          unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
+          if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
+            echo 'Unexpected x86_64 native libraries packaged' >&2
+            exit 1
+          fi
+          sha256sum "$OUT" | tee dist/APK_SHA256.txt
+          ls -lh "$OUT"
+
+      - name: Upload installable FAST-video APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64
+          path: |
+            dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk
+            dist/APK_SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
