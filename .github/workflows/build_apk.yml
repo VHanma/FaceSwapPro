@@ -61,33 +61,40 @@ jobs:
           python -m pip install 'buildozer==1.6.0'
           buildozer --version
 
-      - name: Bundle OpenCV face detector
+      - name: Bundle real and anime face detectors
         run: |
           mkdir -p assets
           curl --fail --location --retry 3 \
             https://raw.githubusercontent.com/opencv/opencv/4.12.0/data/haarcascades/haarcascade_frontalface_alt2.xml \
             --output assets/haarcascade_frontalface_alt2.xml
+          curl --fail --location --retry 3 \
+            https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml \
+            --output assets/lbpcascade_animeface.xml
           test -s assets/haarcascade_frontalface_alt2.xml
+          test -s assets/lbpcascade_animeface.xml
 
       - name: Prepare collision-free packaged engine
         run: |
           cp faceswap.py faceswap_engine.py
           test -s faceswap_engine.py
           test -s omega_engine.py
+          test -s omega_v15.py
 
-      - name: Validate Omega source
+      - name: Validate Omega v1.5 source
         run: |
-          python -m py_compile main.py faceswap_engine.py omega_engine.py faceswap/__init__.py
-          grep -q 'def process_video' faceswap_engine.py
-          grep -q 'class OmegaFaceSwapper' omega_engine.py
-          grep -q 'calcOpticalFlowPyrLK' omega_engine.py
-          grep -q 'estimateAffinePartial2D' omega_engine.py
-          grep -q 'from omega_engine import OmegaFaceSwapper' faceswap/__init__.py
+          python -m py_compile main.py faceswap_engine.py omega_engine.py omega_v15.py faceswap/__init__.py
+          grep -q 'class OmegaFaceSwapper' omega_v15.py
+          grep -q 'lbpcascade_animeface.xml' omega_v15.py
+          grep -q 'INTER_LANCZOS4' omega_v15.py
+          grep -q 'estimateAffinePartial2D' omega_v15.py
+          grep -q 'BaseFaceSwapper.process_video' omega_v15.py
+          ! grep -q 'seamlessClone' omega_v15.py
+          grep -q 'from omega_v15 import OmegaFaceSwapper' faceswap/__init__.py
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q 'TemporaryFile' faceswap/__init__.py
-          grep -q '"17"' faceswap/__init__.py
+          grep -q '"15"' faceswap/__init__.py
           grep -q 'requirements = .*opencv.*ffmpeg.*av_codecs' buildozer.spec
-          grep -q 'version = 1.4.0' buildozer.spec
+          grep -q 'version = 1.5.0' buildozer.spec
           grep -q 'p4a.branch = v2026.05.09' buildozer.spec
           grep -q 'android.api = 36' buildozer.spec
           grep -q 'android.ndk = 28c' buildozer.spec
@@ -104,16 +111,16 @@ jobs:
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           test -n "$APK"
           unzip -l "$APK" | grep -q 'libffmpegbin.so'
-          cp "$APK" FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
-          ls -lh FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
-          sha256sum FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk | tee APK_SHA256.txt
+          cp "$APK" FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk
+          ls -lh FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk
+          sha256sum FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk | tee APK_SHA256.txt
 
       - name: Upload installable APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v1.4.0-Omega-temporal-arm64
+          name: FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64
           path: |
-            FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk
+            FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk
             APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
@@ -123,10 +130,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='v1.4.0 Omega adds optical-flow face tracking, adaptive landmark fusion, detector-loss recovery, motion-aware anti-flicker, previous-frame reprojection, enhanced source texture, local exposure matching, seam-safe microdetail recovery, and higher-quality H.264/AAC export while remaining fully offline.'
+          NOTES='v1.5.0 removes rendered-frame temporal averaging and seamless cloning to eliminate cumulative face blur, switches to a full-resolution Lanczos identity warp with local eye/mouth deformation, adds dedicated anime/cartoon detection and illustrated landmarks, preserves flat animation colors, improves small-source scaling, and raises H.264 output quality to CRF 15 while remaining fully offline.'
           if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk APK_SHA256.txt \
+              FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk APK_SHA256.txt \
               --clobber
             gh release edit "$APK_RELEASE_TAG" \
               --title "$APK_RELEASE_NAME" \
@@ -134,7 +141,7 @@ jobs:
               --latest
           else
             gh release create "$APK_RELEASE_TAG" \
-              FaceSwapPro-v1.4.0-Omega-temporal-arm64.apk APK_SHA256.txt \
+              FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk APK_SHA256.txt \
               --title "$APK_RELEASE_NAME" \
               --notes "$NOTES" \
               --latest
