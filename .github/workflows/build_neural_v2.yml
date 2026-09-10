@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/neural-v2-native
+      - fix/neural-v2-fastload-v203
     paths:
       - 'neural_v2/**'
       - '.github/workflows/build_neural_v2.yml'
@@ -50,7 +51,7 @@ jobs:
           git checkout d5672622e53a97b04a158440a507126f384964ac
           test "$(git rev-parse HEAD)" = 'd5672622e53a97b04a158440a507126f384964ac'
 
-      - name: Apply Omega photo Ultra512 + FAST video layer
+      - name: Apply Omega fast-start neural stack
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
@@ -69,17 +70,21 @@ jobs:
           PY
           python neural_v2/apply_video_v2.py neural-upstream
           python neural_v2/apply_video_perf_v22.py neural-upstream
+          python neural_v2/apply_fastload_v203.py neural-upstream
 
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
-          grep -q 'versionCode = 20003' neural-upstream/app/build.gradle.kts
-          grep -q 'versionName = "2.0.2-alpha-video-fast"' neural-upstream/app/build.gradle.kts
+          grep -q 'versionCode = 20004' neural-upstream/app/build.gradle.kts
+          grep -q 'versionName = "2.0.3-alpha-fastload"' neural-upstream/app/build.gradle.kts
           grep -q 'glide = "4.16.0"' neural-upstream/gradle/libs.versions.toml
           grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
           grep -q 'MAX_RENDER_FPS = 12.0' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
           grep -q 'MAX_LONG_EDGE = 1280' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
-          grep -q 'targetFace.bbox.width()' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
           grep -q 'Render FAST neural video' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'w600k_mbf.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceEmbedder.java
+          grep -q 'inswapper_128_fp16.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceSwapper.java
+          grep -q 'runWhenModelsReady(this::processFaceFusion)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
+          ! grep -q $'initViews();\n        initModels();' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
           grep -q 'VIDEO SWAP' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
           grep -q '.VideoSwapActivity' neural-upstream/app/src/main/AndroidManifest.xml
 
@@ -92,14 +97,14 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify ARM64 FAST-video package
+      - name: Verify ARM64 fast-start package
         shell: bash
         run: |
           set -euo pipefail
           APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
           mkdir -p dist
-          OUT='dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk'
+          OUT='dist/FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64.apk'
           cp "$APK" "$OUT"
           unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
           if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
@@ -109,12 +114,12 @@ jobs:
           sha256sum "$OUT" | tee dist/APK_SHA256.txt
           ls -lh "$OUT"
 
-      - name: Upload installable FAST-video APK
+      - name: Upload installable fast-start APK
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64
+          name: FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64
           path: |
-            dist/FaceSwapPro-v2.0.2-Neural-FAST-Video-arm64.apk
+            dist/FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64.apk
             dist/APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
