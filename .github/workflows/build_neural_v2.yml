@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -36,11 +36,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android 37 + NDK 28.2
+      - name: Install Android 36 + NDK 28.2
         shell: bash
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platforms;android-37' 'build-tools;37.0.0' 'ndk;28.2.13676358'
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
 
       - name: Fetch pinned MIT native neural chassis
         shell: bash
@@ -54,10 +54,14 @@ jobs:
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
+          # Upstream moved to API 37 one day before this build; current hosted SDK catalog
+          # exposes stable API 36, matching FaceSwapPro's Android 16 target.
+          sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
+          grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
+          grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
           grep -q 'org.vaan.faceswap.neuralv2' neural-upstream/app/build.gradle.kts
           grep -q 'FaceSwap Pro Neural v2' neural-upstream/app/src/main/res/values/strings.xml
           grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
-          grep -q 'phases, not spatial tiles' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java || true
           grep -q 'referenceLandmarks(targetSize)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/ImageUtils.java
           grep -q 'OmegaPixelBoost.swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceFusionProcessor.java
 
