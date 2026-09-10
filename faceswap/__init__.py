@@ -9,7 +9,7 @@ import tempfile
 from typing import Optional
 
 from faceswap_engine import CancelCallback, ProgressCallback, VideoInfo
-from omega_v15 import OmegaFaceSwapper
+from omega_v15_fix import OmegaFaceSwapper
 
 
 def _android_native_library_dir() -> Optional[str]:
