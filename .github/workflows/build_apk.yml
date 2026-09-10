@@ -79,17 +79,19 @@ jobs:
           test -s faceswap_engine.py
           test -s omega_engine.py
           test -s omega_v15.py
+          test -s omega_v15_fix.py
 
       - name: Validate Omega v1.5 source
         run: |
-          python -m py_compile main.py faceswap_engine.py omega_engine.py omega_v15.py faceswap/__init__.py
+          python -m py_compile main.py faceswap_engine.py omega_engine.py omega_v15.py omega_v15_fix.py faceswap/__init__.py
           grep -q 'class OmegaFaceSwapper' omega_v15.py
           grep -q 'lbpcascade_animeface.xml' omega_v15.py
           grep -q 'INTER_LANCZOS4' omega_v15.py
           grep -q 'estimateAffinePartial2D' omega_v15.py
           grep -q 'BaseFaceSwapper.process_video' omega_v15.py
           ! grep -q 'seamlessClone' omega_v15.py
-          grep -q 'from omega_v15 import OmegaFaceSwapper' faceswap/__init__.py
+          grep -q 'palette_sparsity' omega_v15_fix.py
+          grep -q 'from omega_v15_fix import OmegaFaceSwapper' faceswap/__init__.py
           grep -q 'libffmpegbin.so' faceswap/__init__.py
           grep -q 'TemporaryFile' faceswap/__init__.py
           grep -q '"15"' faceswap/__init__.py
@@ -130,7 +132,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES='v1.5.0 removes rendered-frame temporal averaging and seamless cloning to eliminate cumulative face blur, switches to a full-resolution Lanczos identity warp with local eye/mouth deformation, adds dedicated anime/cartoon detection and illustrated landmarks, preserves flat animation colors, improves small-source scaling, and raises H.264 output quality to CRF 15 while remaining fully offline.'
+          NOTES='v1.5.0 removes rendered-frame temporal averaging and seamless cloning to eliminate cumulative face blur, switches to a full-resolution Lanczos identity warp with local eye/mouth deformation, adds dedicated anime/cartoon detection and illustrated landmarks including flat-color line-art recognition, preserves animation colors, improves small-source scaling, and raises H.264 output quality to CRF 15 while remaining fully offline.'
           if gh release view "$APK_RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$APK_RELEASE_TAG" \
               FaceSwapPro-v1.5.0-Omega-sharp-cartoon-arm64.apk APK_SHA256.txt \
