@@ -1,0 +1,24 @@
+name: Inspect Free Turbo Space
+
+on:
+  push:
+    branches: [feature/cloud-turbo-v3]
+    paths: ['.github/workflows/inspect_free_turbo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect ALSv FaceSwapAll Gradio API
+        run: |
+          python -m pip install -q hf-gradio
+          hf-gradio info ALSv/FaceSwapAll | tee /tmp/hf_gradio_info.json
+          grep -Ei 'predict|video' /tmp/hf_gradio_info.json || true
