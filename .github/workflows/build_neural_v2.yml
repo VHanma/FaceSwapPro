@@ -33,6 +33,7 @@ jobs:
           python -m py_compile free_turbo/app.py
           python -m py_compile neural_v2/apply_cloud_turbo_v31_runpod.py
           python -m py_compile neural_v2/apply_free_turbo_v32.py
+          python -m py_compile neural_v2/apply_free_turbo_v32_free_tier_fix.py
           grep -q '@spaces.GPU' free_turbo/app.py
           grep -q 'simswap_512_beta.pth' free_turbo/app.py
           grep -q 'zero-a10g' neural_v2/apply_free_turbo_v32.py
@@ -95,6 +96,7 @@ jobs:
           python neural_v2/apply_cloud_turbo_v3.py neural-upstream
           python neural_v2/apply_cloud_turbo_v31_runpod.py neural-upstream
           python neural_v2/apply_free_turbo_v32.py neural-upstream
+          python neural_v2/apply_free_turbo_v32_free_tier_fix.py neural-upstream
 
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
@@ -103,7 +105,7 @@ jobs:
           grep -q 'SET UP FREE TURBO' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
           grep -q 'FREE TURBO READY' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
           grep -q 'AndroidKeyStore' neural-upstream/app/src/main/java/com/pv/androidfacefusion/TurboSecureStore.java
-          grep -q 'zero-a10g' neural-upstream/app/src/main/java/com/pv/androidfacefusion/HfZeroGpuProvisioner.java
+          grep -q 'create.put("hardware", "zero-a10g")' neural-upstream/app/src/main/java/com/pv/androidfacefusion/HfZeroGpuProvisioner.java
           grep -q '/gradio_api/upload' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FreeTurboClient.java
           grep -q '@spaces.GPU' neural-upstream/app/src/main/assets/free_turbo/app.py
           grep -q 'Local Private' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
