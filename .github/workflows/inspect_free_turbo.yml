@@ -1,0 +1,39 @@
+name: Inspect Free Turbo Space
+
+on:
+  push:
+    branches: [feature/cloud-turbo-v3]
+    paths: ['.github/workflows/inspect_free_turbo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect candidate face-swap video hardware
+        run: |
+          python -m pip install -q huggingface_hub
+          python - <<'PY'
+          from huggingface_hub import HfApi
+          api=HfApi()
+          ids=[
+            'tonyassi/video-face-swap-free',
+            'MarkoVidrih/video-face-swap',
+            'tonyassi/video-face-swap',
+            'kahramango/InsightFace-Face_Swapper-on_video',
+            'ALSv/FaceSwapAll',
+          ]
+          for sid in ids:
+              try:
+                  r=api.get_space_runtime(sid)
+                  print(f'{sid}|stage={r.stage}|hardware={r.hardware}|requested={r.requested_hardware}')
+              except Exception as e:
+                  print(f'{sid}|ERROR={e}')
+          PY
