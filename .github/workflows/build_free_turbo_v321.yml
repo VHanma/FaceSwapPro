@@ -1,0 +1,107 @@
+name: Build FaceSwapPro v3.2.1 Free Turbo Hangfix
+
+on:
+  push:
+    branches:
+      - feature/cloud-turbo-v3
+    paths:
+      - 'neural_v2/apply_free_turbo_v321_hangfix.py'
+      - '.github/workflows/build_free_turbo_v321.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-v321:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate v3.2.1 patch
+        run: |
+          python -m py_compile neural_v2/apply_free_turbo_v321_hangfix.py
+          grep -q 'timed out after 7 minutes' neural_v2/apply_free_turbo_v321_hangfix.py
+          grep -q 'smartQuality' neural_v2/apply_free_turbo_v321_hangfix.py
+          grep -q 'waitForEndpoint' neural_v2/apply_free_turbo_v321_hangfix.py
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+
+      - name: Fetch pinned native chassis
+        run: |
+          git clone --filter=blob:none https://github.com/Parasaran-Python/android-face-fusion.git neural-upstream
+          cd neural-upstream
+          git checkout d5672622e53a97b04a158440a507126f384964ac
+
+      - name: Apply complete Free Turbo stack
+        run: |
+          python neural_v2/apply_omega_v2.py neural-upstream
+          sed -i 's/version = release(37)/version = release(36)/' neural-upstream/app/build.gradle.kts
+          sed -i 's/glide = "5.0.9"/glide = "4.16.0"/' neural-upstream/gradle/libs.versions.toml
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java')
+          s=p.read_text()
+          s=s.replace('import android.util.Log;\n','import android.util.Log;\nimport ai.onnxruntime.OrtException;\n',1)
+          s=s.replace('Bitmap targetImage) {','Bitmap targetImage) throws OrtException {',1)
+          s=s.replace('Bitmap targetImage, int phases) {','Bitmap targetImage, int phases) throws OrtException {',1)
+          p.write_text(s)
+          PY
+          python neural_v2/apply_video_v2.py neural-upstream
+          python neural_v2/apply_video_perf_v22.py neural-upstream
+          python neural_v2/apply_fastload_v203.py neural-upstream
+          python neural_v2/apply_cloud_turbo_v3.py neural-upstream
+          python neural_v2/apply_cloud_turbo_v31_runpod.py neural-upstream
+          python neural_v2/apply_free_turbo_v32.py neural-upstream
+          python neural_v2/apply_free_turbo_v32_free_tier_fix.py neural-upstream
+          python neural_v2/apply_free_turbo_v32_compile_fix.py neural-upstream
+          python neural_v2/apply_free_turbo_v321_hangfix.py neural-upstream
+          grep -q 'versionCode = 30201' neural-upstream/app/build.gradle.kts
+          grep -q '3.2.1-free-zerogpu-hangfix' neural-upstream/app/build.gradle.kts
+          grep -q 'waitForEndpoint' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FreeTurboClient.java
+          grep -q 'smartQuality' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FreeTurboClient.java
+          grep -q 'timed out after 7 minutes' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FreeTurboClient.java
+          grep -q '@spaces.GPU(duration=285)' neural-upstream/app/src/main/assets/free_turbo/app.py
+          grep -q 'torch.load(save_path, weights_only=True)' neural-upstream/app/src/main/assets/free_turbo/app.py
+
+      - name: Build APK
+        working-directory: neural-upstream
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify package
+        run: |
+          set -euo pipefail
+          APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
+          mkdir -p dist
+          OUT='dist/FaceSwapPro-v3.2.1-FreeTurbo-HangFix-arm64.apk'
+          cp "$APK" "$OUT"
+          unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
+          unzip -l "$OUT" | grep -q 'assets/free_turbo/app.py'
+          if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then exit 1; fi
+          sha256sum "$OUT" | tee dist/APK_SHA256.txt
+          ls -lh "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapPro-v3.2.1-FreeTurbo-HangFix-arm64
+          path: |
+            dist/FaceSwapPro-v3.2.1-FreeTurbo-HangFix-arm64.apk
+            dist/APK_SHA256.txt
+          retention-days: 30
