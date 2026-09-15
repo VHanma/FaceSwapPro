@@ -1,0 +1,13 @@
+gradio>=5.29,<7
+spaces
+huggingface_hub>=0.35
+opencv-python-headless>=4.10
+onnxruntime>=1.20
+insightface==0.7.3
+moviepy==1.0.3
+numpy==1.26.4
+scipy>=1.11
+scikit-image>=0.22
+imageio>=2.34
+imageio-ffmpeg>=0.5
+tqdm>=4.66
