@@ -29,6 +29,7 @@ jobs:
         shell: bash
         run: |
           python -m py_compile cloud_turbo/server.py
+          python -m py_compile neural_v2/apply_cloud_turbo_v31_runpod.py
           grep -q '/v1/video-swap' cloud_turbo/server.py
           grep -q 'tensorrt' cloud_turbo/server.py
           grep -q 'h264_nvenc' cloud_turbo/server.py
@@ -89,14 +90,19 @@ jobs:
           python neural_v2/apply_video_perf_v22.py neural-upstream
           python neural_v2/apply_fastload_v203.py neural-upstream
           python neural_v2/apply_cloud_turbo_v3.py neural-upstream
+          python neural_v2/apply_cloud_turbo_v31_runpod.py neural-upstream
 
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
-          grep -q 'versionCode = 30001' neural-upstream/app/build.gradle.kts
-          grep -q 'versionName = "3.0.0-alpha-cloud-turbo"' neural-upstream/app/build.gradle.kts
-          grep -q 'Turbo Cloud GPU' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'versionCode = 30100' neural-upstream/app/build.gradle.kts
+          grep -q 'versionName = "3.1.0-alpha-runpod-auto"' neural-upstream/app/build.gradle.kts
+          grep -q 'AUTO SETUP TURBO GPU' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'AndroidKeyStore' neural-upstream/app/src/main/java/com/pv/androidfacefusion/TurboSecureStore.java
+          grep -q 'rest.runpod.io/v1' neural-upstream/app/src/main/java/com/pv/androidfacefusion/RunPodProvisioner.java
+          grep -q 'facefusion/facefusion:3.8.3-tensorrt' neural-upstream/app/src/main/java/com/pv/androidfacefusion/RunPodProvisioner.java
+          grep -q '.TurboAutoStopReceiver' neural-upstream/app/src/main/AndroidManifest.xml
+          grep -q 'RunPodProvisioner.ensureRunning' neural-upstream/app/src/main/java/com/pv/androidfacefusion/CloudTurboClient.java
           grep -q 'Local Private' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
-          grep -q '/v1/video-swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/CloudTurboClient.java
           grep -q 'w600k_mbf.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceEmbedder.java
           grep -q 'inswapper_128_fp16.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceSwapper.java
           ! python - <<'PY'
@@ -115,22 +121,24 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify ARM64 Cloud Turbo package
+      - name: Verify ARM64 RunPod Turbo package
         shell: bash
         run: |
           set -euo pipefail
           APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
           mkdir -p dist
-          OUT='dist/FaceSwapPro-v3.0.0-Cloud-Turbo-arm64.apk'
+          OUT='dist/FaceSwapPro-v3.1.0-RunPod-Turbo-arm64.apk'
           cp "$APK" "$OUT"
           unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
           unzip -Z1 "$OUT" | grep -q '^classes.*\.dex$'
-          FOUND=0
-          while read -r dex; do
-            if unzip -p "$OUT" "$dex" | strings | grep -q 'CloudTurboClient'; then FOUND=1; break; fi
-          done < <(unzip -Z1 "$OUT" | grep '^classes.*\.dex$')
-          test "$FOUND" = 1
+          for NEEDLE in CloudTurboClient RunPodProvisioner TurboSecureStore TurboAutoStopReceiver; do
+            FOUND=0
+            while read -r dex; do
+              if unzip -p "$OUT" "$dex" | strings | grep -q "$NEEDLE"; then FOUND=1; break; fi
+            done < <(unzip -Z1 "$OUT" | grep '^classes.*\.dex$')
+            test "$FOUND" = 1
+          done
           if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
             echo 'Unexpected x86_64 native libraries packaged' >&2
             exit 1
@@ -138,12 +146,12 @@ jobs:
           sha256sum "$OUT" | tee dist/APK_SHA256.txt
           ls -lh "$OUT"
 
-      - name: Upload installable Cloud Turbo APK
+      - name: Upload installable RunPod Turbo APK
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v3.0.0-Cloud-Turbo-arm64
+          name: FaceSwapPro-v3.1.0-RunPod-Turbo-arm64
           path: |
-            dist/FaceSwapPro-v3.0.0-Cloud-Turbo-arm64.apk
+            dist/FaceSwapPro-v3.1.0-RunPod-Turbo-arm64.apk
             dist/APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
