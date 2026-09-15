@@ -17,15 +17,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect ALSv FaceSwapAll Gradio API and hardware
+      - name: Inspect candidate face-swap video hardware
         run: |
-          python -m pip install -q hf-gradio huggingface_hub
+          python -m pip install -q huggingface_hub
           python - <<'PY'
           from huggingface_hub import HfApi
-          r=HfApi().get_space_runtime('ALSv/FaceSwapAll')
-          print('STAGE=', r.stage)
-          print('HARDWARE=', r.hardware)
-          print('REQUESTED=', r.requested_hardware)
+          api=HfApi()
+          ids=[
+            'tonyassi/video-face-swap-free',
+            'MarkoVidrih/video-face-swap',
+            'tonyassi/video-face-swap',
+            'kahramango/InsightFace-Face_Swapper-on_video',
+            'ALSv/FaceSwapAll',
+          ]
+          for sid in ids:
+              try:
+                  r=api.get_space_runtime(sid)
+                  print(f'{sid}|stage={r.stage}|hardware={r.hardware}|requested={r.requested_hardware}')
+              except Exception as e:
+                  print(f'{sid}|ERROR={e}')
           PY
-          hf-gradio info ALSv/FaceSwapAll | tee /tmp/hf_gradio_info.json
-          grep -Ei 'predict_5|video' /tmp/hf_gradio_info.json || true
