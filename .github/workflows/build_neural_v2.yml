@@ -5,8 +5,10 @@ on:
     branches:
       - feature/neural-v2-native
       - fix/neural-v2-fastload-v203
+      - feature/cloud-turbo-v3
     paths:
       - 'neural_v2/**'
+      - 'cloud_turbo/**'
       - '.github/workflows/build_neural_v2.yml'
   workflow_dispatch:
 
@@ -22,6 +24,14 @@ jobs:
     steps:
       - name: Check out FaceSwapPro patch layer
         uses: actions/checkout@v4
+
+      - name: Validate Turbo service source
+        shell: bash
+        run: |
+          python -m py_compile cloud_turbo/server.py
+          grep -q '/v1/video-swap' cloud_turbo/server.py
+          grep -q 'tensorrt' cloud_turbo/server.py
+          grep -q 'h264_nvenc' cloud_turbo/server.py
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -51,7 +61,7 @@ jobs:
           git checkout d5672622e53a97b04a158440a507126f384964ac
           test "$(git rev-parse HEAD)" = 'd5672622e53a97b04a158440a507126f384964ac'
 
-      - name: Apply Omega fast-start neural stack
+      - name: Apply Omega Cloud Turbo stack
         shell: bash
         run: |
           python neural_v2/apply_omega_v2.py neural-upstream
@@ -71,22 +81,23 @@ jobs:
           python neural_v2/apply_video_v2.py neural-upstream
           python neural_v2/apply_video_perf_v22.py neural-upstream
           python neural_v2/apply_fastload_v203.py neural-upstream
+          python neural_v2/apply_cloud_turbo_v3.py neural-upstream
 
           grep -q 'version = release(36)' neural-upstream/app/build.gradle.kts
           grep -q 'targetSdk = 36' neural-upstream/app/build.gradle.kts
-          grep -q 'versionCode = 20004' neural-upstream/app/build.gradle.kts
-          grep -q 'versionName = "2.0.3-alpha-fastload"' neural-upstream/app/build.gradle.kts
-          grep -q 'glide = "4.16.0"' neural-upstream/gradle/libs.versions.toml
-          grep -q 'ULTRA_SIZE = 512' neural-upstream/app/src/main/java/com/pv/androidfacefusion/OmegaPixelBoost.java
-          grep -q 'MAX_RENDER_FPS = 12.0' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
-          grep -q 'MAX_LONG_EDGE = 1280' neural-upstream/app/src/main/java/com/pv/androidfacefusion/NeuralVideoProcessor.java
-          grep -q 'Render FAST neural video' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'versionCode = 30001' neural-upstream/app/build.gradle.kts
+          grep -q 'versionName = "3.0.0-alpha-cloud-turbo"' neural-upstream/app/build.gradle.kts
+          grep -q 'Turbo Cloud GPU' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q 'Local Private' neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java
+          grep -q '/v1/video-swap' neural-upstream/app/src/main/java/com/pv/androidfacefusion/CloudTurboClient.java
           grep -q 'w600k_mbf.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceEmbedder.java
           grep -q 'inswapper_128_fp16.onnx' neural-upstream/app/src/main/java/com/pv/androidfacefusion/FaceSwapper.java
-          grep -q 'runWhenModelsReady(this::processFaceFusion)' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
-          ! grep -q $'initViews();\n        initModels();' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
-          grep -q 'VIDEO SWAP' neural-upstream/app/src/main/java/com/pv/androidfacefusion/MainActivity.java
-          grep -q '.VideoSwapActivity' neural-upstream/app/src/main/AndroidManifest.xml
+          ! python - <<'PY'
+          from pathlib import Path
+          s=Path('neural-upstream/app/src/main/java/com/pv/androidfacefusion/VideoSwapActivity.java').read_text()
+          x=s[s.index('protected void onCreate'):s.index('private void buildUi')]
+          raise SystemExit(0 if 'warmModels();' in x else 1)
+          PY
 
       - name: Build native neural APK
         working-directory: neural-upstream
@@ -97,16 +108,17 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify ARM64 fast-start package
+      - name: Verify ARM64 Cloud Turbo package
         shell: bash
         run: |
           set -euo pipefail
           APK='neural-upstream/app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
           mkdir -p dist
-          OUT='dist/FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64.apk'
+          OUT='dist/FaceSwapPro-v3.0.0-Cloud-Turbo-arm64.apk'
           cp "$APK" "$OUT"
           unzip -l "$OUT" | grep -q 'lib/arm64-v8a/'
+          unzip -l "$OUT" | grep -q 'CloudTurboClient'
           if unzip -l "$OUT" | grep -q 'lib/x86_64/'; then
             echo 'Unexpected x86_64 native libraries packaged' >&2
             exit 1
@@ -114,12 +126,12 @@ jobs:
           sha256sum "$OUT" | tee dist/APK_SHA256.txt
           ls -lh "$OUT"
 
-      - name: Upload installable fast-start APK
+      - name: Upload installable Cloud Turbo APK
         uses: actions/upload-artifact@v4
         with:
-          name: FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64
+          name: FaceSwapPro-v3.0.0-Cloud-Turbo-arm64
           path: |
-            dist/FaceSwapPro-v2.0.3-Neural-FastStart-Video-arm64.apk
+            dist/FaceSwapPro-v3.0.0-Cloud-Turbo-arm64.apk
             dist/APK_SHA256.txt
           if-no-files-found: error
           retention-days: 30
